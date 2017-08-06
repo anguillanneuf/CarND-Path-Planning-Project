@@ -162,6 +162,7 @@ CMakeFiles/path_planning.dir/src/main.cpp.o
  /Users/tz/Documents/carnd/CarND-Path-Planning-Project/src/Eigen-3.3/Eigen/src/plugins/MatrixCwiseUnaryOps.h
  /Users/tz/Documents/carnd/CarND-Path-Planning-Project/src/json.hpp
  /Users/tz/Documents/carnd/CarND-Path-Planning-Project/src/main.cpp
+ /Users/tz/Documents/carnd/CarND-Path-Planning-Project/src/spline.h
  /usr/local/include/pthread-barrier.h
  /usr/local/include/uWS/Extensions.h
  /usr/local/include/uWS/Group.h

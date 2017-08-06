@@ -849,6 +849,18 @@ Eigen-3.3/Eigen/QR
 /Users/tz/Documents/carnd/CarND-Path-Planning-Project/src/Eigen-3.3/Eigen/QR
 json.hpp
 /Users/tz/Documents/carnd/CarND-Path-Planning-Project/src/json.hpp
+spline.h
+/Users/tz/Documents/carnd/CarND-Path-Planning-Project/src/spline.h
+
+/Users/tz/Documents/carnd/CarND-Path-Planning-Project/src/spline.h
+cstdio
+-
+cassert
+-
+vector
+-
+algorithm
+-
 
 /usr/local/include/pthread-barrier.h
 errno.h

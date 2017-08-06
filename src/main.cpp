@@ -8,6 +8,7 @@
 #include "Eigen-3.3/Eigen/Core"
 #include "Eigen-3.3/Eigen/QR"
 #include "json.hpp"
+#include "spline.h"
 
 using namespace std;
 
@@ -232,13 +233,59 @@ int main() {
 
 
                     // TODO: define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
-                    // 25 m/s is close to 50 MPH
 
+                    /*
+                     * straight path test
+                     *
                     double dist_inc = 0.5; // point path spacing to be 0.5m apart
                     for(int i = 0; i < 50; i++) // car moves 50 times/second, each move takes 20ms
                     {
                         next_x_vals.push_back(car_x+(dist_inc*i)*cos(deg2rad(car_yaw)));
                         next_y_vals.push_back(car_y+(dist_inc*i)*sin(deg2rad(car_yaw)));
+                    }*/
+
+                    /*
+                     * more complex path test
+                     * */
+
+                    double pos_x;
+                    double pos_y;
+                    double angle;
+                    int path_size = previous_path_x.size();
+
+                    // Using information from the previous path ensures that there is a smooth transition from cycle to cycle.
+                    // But the more waypoints we use from the previous path, the less the new path will reflect dynamic changes in the environment.
+
+                    for (int i = 0; i < path_size; i++) {
+                        next_x_vals.push_back(previous_path_x[i]);
+                        next_y_vals.push_back(previous_path_y[i]);
+                    }
+
+                    if (path_size == 0) {
+                        pos_x = car_x;
+                        pos_y = car_y;
+                        angle = deg2rad(car_yaw);
+                    } else {
+                        pos_x = previous_path_x[path_size - 1];
+                        pos_y = previous_path_y[path_size - 1];
+
+                        double pos_x2 = previous_path_x[path_size - 2];
+                        double pos_y2 = previous_path_y[path_size - 2];
+                        angle = atan2(pos_y - pos_y2, pos_x - pos_x2);
+                    }
+
+                    // your C++ path planner will at the very least be one cycle behind the simulator because
+                    // the C++ program can't receive and send data on the same cycle.
+                    // As a result, any path that the simulator receives will be from the perspective of a previous cycle.
+                    // This might mean that by the time a new path reaches the simulator,
+                    // the vehicle has already passed the first few waypoints on that path.
+
+                    double dist_inc = 0.5;
+                    for (int i = 0; i < 50 - path_size; i++) {
+                        next_x_vals.push_back(pos_x + (dist_inc) * cos(angle + (i + 1) * (pi() / 100)));
+                        next_y_vals.push_back(pos_y + (dist_inc) * sin(angle + (i + 1) * (pi() / 100)));
+                        pos_x += (dist_inc) * cos(angle + (i + 1) * (pi() / 100));
+                        pos_y += (dist_inc) * sin(angle + (i + 1) * (pi() / 100));
                     }
 
 
