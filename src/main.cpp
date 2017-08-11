@@ -188,7 +188,12 @@ int main() {
         map_waypoints_dy.push_back(d_y);
     }
 
-    h.onMessage([&map_waypoints_x, &map_waypoints_y, &map_waypoints_s, &map_waypoints_dx, &map_waypoints_dy](
+
+    int lane = 1;
+    double ref_v = 49.5;
+
+
+    h.onMessage([&ref_v, &map_waypoints_x, &map_waypoints_y, &map_waypoints_s, &map_waypoints_dx, &map_waypoints_dy, &lane](
             uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
             uWS::OpCode opCode) {
         // "42" at the start of the message means there's a websocket message event.
@@ -231,69 +236,114 @@ int main() {
                     vector<double> next_x_vals;
                     vector<double> next_y_vals;
 
-
                     // TODO: define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
 
+                    int prev_size = previous_path_x.size();
 
-                    double dist_inc = 0.4; // point path spacing to be 0.5m apart
-                    for(int i = 0; i < 50; i++) // car moves 50 times/second, each move takes 20ms
-                    {
-                        double next_s = car_s + dist_inc*(i+1);
-                        double next_d = 6;
-                        vector<double> xy = getXY(next_s, next_d, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-                        next_x_vals.push_back(xy[0]);
-                        next_y_vals.push_back(xy[1]);
+                    vector<double> ptsx;
+                    vector<double> ptsy;
+                    double ref_x = car_x;
+                    double ref_y = car_y;
+                    double ref_yaw = deg2rad(car_yaw);
+
+                    if(prev_size < 2){
+                        // create points tangent to the car
+                        double prev_car_x = car_x - cos(car_yaw) ;//cos(deg2rad(car_yaw));
+                        double prev_car_y = car_y - sin(car_yaw);//sin(deg2rad(car_yaw));
+
+                        ptsx.push_back(prev_car_x);
+                        ptsx.push_back(car_x);
+
+                        ptsy.push_back(prev_car_y);
+                        ptsy.push_back(car_y);
+
+                    } else {
+                        // redefine reference state using previous path
+                        ref_x = previous_path_x[prev_size-1];
+                        ref_y = previous_path_y[prev_size-1];
+
+                        double ref_prev_x = previous_path_x[prev_size - 2];
+                        double ref_prev_y = previous_path_y[prev_size - 2];
+                        ref_yaw = atan2((ref_y - ref_prev_y), (ref_x - ref_prev_x));
+
+                        ptsx.push_back(ref_prev_x);
+                        ptsx.push_back(ref_x);
+                        ptsy.push_back(ref_prev_y);
+                        ptsy.push_back(ref_y);
                     }
 
-                    /*
-                     * more complex path test
-                     * */
+                    // add more points to generate trajectory
+                    vector<double> next_wp0 = getXY(car_s+30, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+                    vector<double> next_wp1 = getXY(car_s+60, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+                    vector<double> next_wp2 = getXY(car_s+90, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
 
-//                    double pos_x;
-//                    double pos_y;
-//                    double angle;
-//                    int path_size = previous_path_x.size();
-//
-//                    // Using information from the previous path ensures that there is a smooth transition from cycle to cycle.
-//                    // But the more waypoints we use from the previous path, the less the new path will reflect dynamic changes in the environment.
-//
-//                    for (int i = 0; i < path_size; i++) {
-//                        next_x_vals.push_back(previous_path_x[i]);
-//                        next_y_vals.push_back(previous_path_y[i]);
-//                    }
-//
-//                    if (path_size == 0) {
-//                        pos_x = car_x;
-//                        pos_y = car_y;
-//                        angle = deg2rad(car_yaw);
-//                    } else {
-//                        pos_x = previous_path_x[path_size - 1];
-//                        pos_y = previous_path_y[path_size - 1];
-//
-//                        double pos_x2 = previous_path_x[path_size - 2];
-//                        double pos_y2 = previous_path_y[path_size - 2];
-//                        angle = atan2(pos_y - pos_y2, pos_x - pos_x2);
-//                    }
-//
-//                    // your C++ path planner will at the very least be one cycle behind the simulator because
-//                    // the C++ program can't receive and send data on the same cycle.
-//                    // As a result, any path that the simulator receives will be from the perspective of a previous cycle.
-//                    // This might mean that by the time a new path reaches the simulator,
-//                    // the vehicle has already passed the first few waypoints on that path.
-//
-//                    double dist_inc = 0.5;
-//                    for (int i = 0; i < 50 - path_size; i++) {
-//                        next_x_vals.push_back(pos_x + (dist_inc) * cos(angle + (i + 1) * (pi() / 100)));
-//                        next_y_vals.push_back(pos_y + (dist_inc) * sin(angle + (i + 1) * (pi() / 100)));
-//                        pos_x += (dist_inc) * cos(angle + (i + 1) * (pi() / 100));
-//                        pos_y += (dist_inc) * sin(angle + (i + 1) * (pi() / 100));
-//                    }
+                    ptsx.push_back(next_wp0[0]);
+                    ptsx.push_back(next_wp1[0]);
+                    ptsx.push_back(next_wp2[0]);
 
-                    for (auto i: sensor_fusion)
-                        cout << i << " ";
-                    cout << endl;
+                    ptsy.push_back(next_wp0[1]);
+                    ptsy.push_back(next_wp1[1]);
+                    ptsy.push_back(next_wp2[1]);
+
+                    for(int i = 0; i < ptsx.size(); i++) // car moves 50 times/second, each move takes 20ms
+                    {
+                        double shift_x = ptsx[i]-ref_x;
+                        double shift_y = ptsy[i]-ref_y;
+
+//                        ptsx[i] = - (shift_x*sin(ref_yaw) - shift_y*cos(ref_yaw));
+//                        ptsy[i] = shift_x*cos(ref_yaw) + shift_y*sin(ref_yaw);
+
+                        ptsx[i] = shift_x*cos(0 - ref_yaw) - shift_y*sin(0 - ref_yaw);
+                        ptsy[i] = shift_x*sin(0 - ref_yaw) + shift_y*cos(0 - ref_yaw);
+                    }
+
+                    // adding the anchor points to ptsx and ptsy.
+                    tk::spline s;
+                    s.set_points(ptsx, ptsy);
+
+
+                    for(int i = 0; i < previous_path_x.size(); i++){
+                        next_x_vals.push_back(previous_path_x[i]);
+                        next_y_vals.push_back(previous_path_y[i]);
+                    }
+
+                    double target_x = 30.0;
+                    double target_y = s(target_x);
+                    double target_distance = sqrt(target_x*target_x+target_y*target_y);//distance(0,0,target_x,target_y);
+                    double x_add_on = 0.0;
+
+
+                    for (int i = 1; i <= 50 - previous_path_x.size(); i ++){
+
+                        double N = target_distance/(ref_v/2.24*0.02);
+
+                        double x_point = x_add_on + target_x/N;
+                        double y_point = s(x_point);
+
+                        x_add_on = x_point;
+
+                        double x_ref = x_point;
+                        double y_ref = y_point;
+
+//                        x_point = ref_x + x_ref*sin(ref_yaw)+y_ref*cos(ref_yaw);
+//                        y_point = ref_y + y_ref*sin(ref_yaw)-x_ref*cos(ref_yaw);
+
+                        x_point = ref_x + x_ref*cos(ref_yaw)-y_ref*sin(ref_yaw);
+                        y_point = ref_y + x_ref*sin(ref_yaw)+y_ref*cos(ref_yaw);
+
+
+                        next_x_vals.push_back(x_point);
+                        next_y_vals.push_back(y_point);
+
+                    }
+
+
 
                     // TODO: end
+
+//                    for (auto i: sensor_fusion)
+//                        cout << i << " ";
+//                    cout << endl;
 
 
                     msgJson["next_x"] = next_x_vals;
