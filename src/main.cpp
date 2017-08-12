@@ -257,18 +257,20 @@ int main() {
                             check_car_s += ((double)prev_size*0.02*check_speed); // when ego gets to the end of
                             // the previous trajectory, where would the other car be
 
-                            if (abs(check_car_s - car_s)<30){
+                            if ((check_car_s > car_s) & (check_car_s - car_s < 30)){
                                 //ref_v = 30;
                                 too_close = true;
                                 // time to change lanes, lower speed
+                                if (lane > 0)
+                                    lane = 0;
                             }
                         }
                     }
 
                     if (too_close)
-                        ref_v -= 0.025;
+                        ref_v -= 0.25;
                     else if (ref_v < 49.5){
-                        ref_v += 0.025; // more efficient if done in below
+                        ref_v += 0.25; // more efficient if done in below
                     }
 
 
