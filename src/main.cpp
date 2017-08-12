@@ -190,7 +190,7 @@ int main() {
 
 
     int lane = 1;
-    double ref_v = 49.5;
+    double ref_v = 0.0;
 
 
     h.onMessage([&ref_v, &map_waypoints_x, &map_waypoints_y, &map_waypoints_s, &map_waypoints_dx, &map_waypoints_dy, &lane](
@@ -240,6 +240,38 @@ int main() {
 
                     int prev_size = previous_path_x.size();
 
+                    if (prev_size > 0)
+                        car_s = end_path_s;
+
+                    bool too_close = false;
+
+                    //find ref_v to use
+                    for (int i = 0; i < sensor_fusion.size(); i ++){
+                        float d = sensor_fusion[i][6];
+                        if (d > 4 * lane & d < 4 * (lane + 1)){
+                            double vx = sensor_fusion[i][3];
+                            double vy = sensor_fusion[i][4];
+                            double check_speed = sqrt(vx * vx + vy * vy);
+                            double check_car_s = sensor_fusion[i][5];
+
+                            check_car_s += ((double)prev_size*0.02*check_speed); // when ego gets to the end of
+                            // the previous trajectory, where would the other car be
+
+                            if (abs(check_car_s - car_s)<30){
+                                //ref_v = 30;
+                                too_close = true;
+                                // time to change lanes, lower speed
+                            }
+                        }
+                    }
+
+                    if (too_close)
+                        ref_v -= 0.025;
+                    else if (ref_v < 49.5){
+                        ref_v += 0.025; // more efficient if done in below
+                    }
+
+
                     vector<double> ptsx;
                     vector<double> ptsy;
                     double ref_x = car_x;
@@ -248,8 +280,8 @@ int main() {
 
                     if(prev_size < 2){
                         // create points tangent to the car
-                        double prev_car_x = car_x - cos(car_yaw) ;//cos(deg2rad(car_yaw));
-                        double prev_car_y = car_y - sin(car_yaw);//sin(deg2rad(car_yaw));
+                        double prev_car_x = car_x - cos(deg2rad(car_yaw)) ;
+                        double prev_car_y = car_y - sin(deg2rad(car_yaw));
 
                         ptsx.push_back(prev_car_x);
                         ptsx.push_back(car_x);
@@ -285,13 +317,10 @@ int main() {
                     ptsy.push_back(next_wp1[1]);
                     ptsy.push_back(next_wp2[1]);
 
-                    for(int i = 0; i < ptsx.size(); i++) // car moves 50 times/second, each move takes 20ms
+                    for(int i = 0; i < ptsx.size(); i++)
                     {
                         double shift_x = ptsx[i]-ref_x;
                         double shift_y = ptsy[i]-ref_y;
-
-//                        ptsx[i] = - (shift_x*sin(ref_yaw) - shift_y*cos(ref_yaw));
-//                        ptsy[i] = shift_x*cos(ref_yaw) + shift_y*sin(ref_yaw);
 
                         ptsx[i] = shift_x*cos(0 - ref_yaw) - shift_y*sin(0 - ref_yaw);
                         ptsy[i] = shift_x*sin(0 - ref_yaw) + shift_y*cos(0 - ref_yaw);
@@ -307,7 +336,7 @@ int main() {
                         next_y_vals.push_back(previous_path_y[i]);
                     }
 
-                    double target_x = 30.0;
+                    double target_x = 30.0;// plan 30m ahead along car's x direction
                     double target_y = s(target_x);
                     double target_distance = sqrt(target_x*target_x+target_y*target_y);//distance(0,0,target_x,target_y);
                     double x_add_on = 0.0;
@@ -325,12 +354,8 @@ int main() {
                         double x_ref = x_point;
                         double y_ref = y_point;
 
-//                        x_point = ref_x + x_ref*sin(ref_yaw)+y_ref*cos(ref_yaw);
-//                        y_point = ref_y + y_ref*sin(ref_yaw)-x_ref*cos(ref_yaw);
-
                         x_point = ref_x + x_ref*cos(ref_yaw)-y_ref*sin(ref_yaw);
                         y_point = ref_y + x_ref*sin(ref_yaw)+y_ref*cos(ref_yaw);
-
 
                         next_x_vals.push_back(x_point);
                         next_y_vals.push_back(y_point);
