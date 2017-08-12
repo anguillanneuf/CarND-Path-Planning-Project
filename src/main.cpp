@@ -68,13 +68,12 @@ int NextWaypoint(double x, double y, double theta, vector<double> maps_x, vector
     double map_x = maps_x[closestWaypoint];
     double map_y = maps_y[closestWaypoint];
 
-    double heading = atan2((map_y - y), (map_x - x)); // atan2 returns a value between -PI and PI
+    double heading = atan2((map_y - y), (map_x - x)); // atan2 in [-PI, PI], where wp is w.r.t. car
 
     double angle = abs(theta - heading); // difference in car yaw and heading
 
-    if (angle > pi() / 4) { // why not pi() / 2 ?
+    if (angle > pi() / 4) // if point is not in car's line of sight, consider it behind
         closestWaypoint++;
-    }
 
     return closestWaypoint;
 
@@ -151,6 +150,77 @@ vector<double> getXY(double s, double d, vector<double> maps_s, vector<double> m
 
 }
 
+// Get approximate Ego vs, vd, as, ad
+vector<double> getEgoReadings(vector<double> previous_path_x, vector<double> previous_path_y, double theta, vector<double> maps_x, vector<double> maps_y){
+    double vs=0.0, vd=0.0, as=0.0, ad=0.0;
+
+    if (previous_path_x.size()>3){
+        vector<double> vs_, vd_, theta_;
+
+        for (int i = 0; i < previous_path_x.size() -1; i ++){
+            double temp_theta = atan2((previous_path_y[i+1] - previous_path_y[i]), (previous_path_x[i+1] - previous_path_x[i]));
+            theta_.push_back(temp_theta);
+            vector<double> temp = getFrenet(previous_path_x[i+1], previous_path_y[i+1], temp_theta, maps_x, maps_y);
+            vs_.push_back(temp[0]);
+            vd_.push_back(temp[1]);
+            vs += temp[0];
+            vd += temp[1];
+        }
+        // s / t
+        vs = vs/((previous_path_x.size()-1)*0.02);
+        vd = vd/((previous_path_y.size()-1)*0.02);
+
+        for (int j = 0; j < vs_.size()-1; j ++){
+            as += (vs_[j+1]-vs_[j]);
+            ad += (vd_[j+1]-vd_[j]);
+        }
+        // vs / t
+        as = as/((vs_.size()-1)*0.02);
+        ad = ad/((vd_.size()-1)*0.02);
+    }
+
+    return {vs, vd, as, ad};
+}
+
+// Fit polynomial
+Eigen::VectorXd polyfit(Eigen::VectorXd xvals, Eigen::VectorXd yvals, int order) {
+    assert(xvals.size() == yvals.size());
+    assert(order >= 1 && order <= xvals.size() - 1);
+    Eigen::MatrixXd A(xvals.size(), order + 1);
+
+    for (int i = 0; i < xvals.size(); i++) {
+        A(i, 0) = 1.0;
+    }
+
+    for (int j = 0; j < xvals.size(); j++) {
+        for (int i = 0; i < order; i++) {
+            A(j, i + 1) = A(j, i) * xvals(j);
+        }
+    }
+
+    auto Q = A.householderQr();
+    auto result = Q.solve(yvals);
+    return result;
+}
+
+// Find road curvature
+double getRoadCurvature(double car_s, int lane, vector<double> maps_s, vector<double> maps_x, vector<double> maps_y){
+
+    Eigen::VectorXd x(10), y(10);
+
+    for (int i = 0; i < 10; i ++){
+        vector<double> temp = getXY(car_s + 10 * i, (2 + 4 * lane), maps_s, maps_x, maps_y);
+        x[i] = temp[0];
+        y[i] = temp[1];
+    }
+
+    auto coeffs = polyfit(x, y, 3);
+
+    double dfdx = coeffs[1] + 2 * coeffs[2] * x[0] + 3 * coeffs[3] * pow(x[0], 2);
+    double dfdx2 = 2 * coeffs[2] + 2 * 3 * coeffs[3] * x[0];
+    return pow(1 + dfdx * dfdx, 1.5) / abs(dfdx2);
+}
+
 int main() {
     uWS::Hub h;
 
@@ -221,6 +291,7 @@ int main() {
                     double car_yaw = j[1]["yaw"]; // in degrees
                     double car_speed = j[1]["speed"];
 
+
                     // Previous path data given to the Planner
                     auto previous_path_x = j[1]["previous_path_x"];
                     auto previous_path_y = j[1]["previous_path_y"];
@@ -242,6 +313,14 @@ int main() {
 
                     if (prev_size > 0)
                         car_s = end_path_s;
+
+                    // pick dd threshold
+                    // generate anchor points
+                    // generate trajectories from anchor points
+                    // use trajectories, map, sensor_fusion to calculate cost
+                    // choose trajectory with minimum cost
+                    // special cases handling: when trajectory meets changes (sunday)
+
 
                     bool too_close = false;
 
@@ -306,6 +385,15 @@ int main() {
                         ptsy.push_back(ref_y);
                     }
 
+                    // TODO: find ego_readings vd [vs, as, vd, ad]
+                    vector<double> ego_readings = getEgoReadings(previous_path_x, previous_path_y, car_yaw, map_waypoints_x, map_waypoints_y);
+                    double ad = ego_readings[3];
+                    cout << "d_dot: " << ad << endl; // abs(ad0 goes above 1 when changing lanes.
+
+                    // TODO: use map xy to find road curvature
+                    double curvature = getRoadCurvature(car_s, lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+                    cout << "Road curvature: " << curvature << endl;// R_curve < 50.0
+
                     // add more points to generate trajectory
                     vector<double> next_wp0 = getXY(car_s+30, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
                     vector<double> next_wp1 = getXY(car_s+60, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
@@ -324,7 +412,7 @@ int main() {
                         double shift_x = ptsx[i]-ref_x;
                         double shift_y = ptsy[i]-ref_y;
 
-                        ptsx[i] = shift_x*cos(0 - ref_yaw) - shift_y*sin(0 - ref_yaw);
+                        ptsx[i] = shift_x*cos(0 - ref_yaw) - shift_y*sin(0 - ref_yaw); // yaw is +ve when turning right
                         ptsy[i] = shift_x*sin(0 - ref_yaw) + shift_y*cos(0 - ref_yaw);
                     }
 
