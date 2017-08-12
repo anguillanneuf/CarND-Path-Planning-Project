@@ -154,21 +154,26 @@ vector<double> getXY(double s, double d, vector<double> maps_s, vector<double> m
 vector<double> getEgoReadings(vector<double> previous_path_x, vector<double> previous_path_y, double theta, vector<double> maps_x, vector<double> maps_y){
     double vs=0.0, vd=0.0, as=0.0, ad=0.0;
 
-    if (previous_path_x.size()>3){
-        vector<double> vs_, vd_, theta_;
+    if (previous_path_x.size()>5){
+        vector<double> s_, d_, vs_, vd_, theta_;
 
         for (int i = 0; i < previous_path_x.size() -1; i ++){
             double temp_theta = atan2((previous_path_y[i+1] - previous_path_y[i]), (previous_path_x[i+1] - previous_path_x[i]));
             theta_.push_back(temp_theta);
             vector<double> temp = getFrenet(previous_path_x[i+1], previous_path_y[i+1], temp_theta, maps_x, maps_y);
-            vs_.push_back(temp[0]);
-            vd_.push_back(temp[1]);
-            vs += temp[0];
-            vd += temp[1];
+            s_.push_back(temp[0]);
+            d_.push_back(temp[1]);
         }
         // s / t
-        vs = vs/((previous_path_x.size()-1)*0.02);
-        vd = vd/((previous_path_y.size()-1)*0.02);
+        for (int j = 0; j < s_.size()-1; j ++){
+            vs_.push_back(s_[j+1]-s_[j]);
+            vd_.push_back(d_[j+1]-d_[j]);
+            vs += (s_[j+1]-s_[j]);
+            vd += (d_[j+1]-d_[j]);
+        }
+
+        vs = vs/((s_.size()-1)*0.02);
+        vd = vd/((d_.size()-1)*0.02);
 
         for (int j = 0; j < vs_.size()-1; j ++){
             as += (vs_[j+1]-vs_[j]);
@@ -314,14 +319,6 @@ int main() {
                     if (prev_size > 0)
                         car_s = end_path_s;
 
-                    // pick dd threshold
-                    // generate anchor points
-                    // generate trajectories from anchor points
-                    // use trajectories, map, sensor_fusion to calculate cost
-                    // choose trajectory with minimum cost
-                    // special cases handling: when trajectory meets changes (sunday)
-
-
                     bool too_close = false;
 
                     //find ref_v to use
@@ -385,10 +382,10 @@ int main() {
                         ptsy.push_back(ref_y);
                     }
 
-                    // TODO: find ego_readings vd [vs, as, vd, ad]
+                    // TODO: find ego_readings vd [vs, vd, as, ad]
                     vector<double> ego_readings = getEgoReadings(previous_path_x, previous_path_y, car_yaw, map_waypoints_x, map_waypoints_y);
-                    double ad = ego_readings[3];
-                    cout << "d_dot: " << ad << endl; // abs(ad0 goes above 1 when changing lanes.
+                    double vd = ego_readings[1];
+                    cout << "d_dot: " << vd << endl; // abs(vd) goes above 1 when changing lanes.
 
                     // TODO: use map xy to find road curvature
                     double curvature = getRoadCurvature(car_s, lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
@@ -451,6 +448,10 @@ int main() {
                         next_y_vals.push_back(y_point);
 
                     }
+
+                    //TODO: generate anchor points
+                    //TODO: generate trajectory for each anchor point
+                    //TODO: calculate cost associated with each trajectory
 
 
 
