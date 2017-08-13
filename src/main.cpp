@@ -150,12 +150,27 @@ vector<double> getXY(double s, double d, vector<double> maps_s, vector<double> m
 
 }
 
-// Get approximate Ego vs, vd, as, ad
+// Calculate lane number for d
+int calculateLane(double d){
+    int lane;
+    if (d > 0.0 & d <= 4.0){
+        lane = 0;
+    } else if (d >4.0 & d <= 8.0) {
+        lane = 1;
+    } else{
+        lane = 2;
+    }
+    return lane;
+}
+
+// Get approximate Ego vs, vd, as, ad, js, jd, vs_max, vd_max, as_max, ad_max, js_max, jd_max given a path or trajectory
 vector<double> getEgoReadings(vector<double> previous_path_x, vector<double> previous_path_y, vector<double> maps_x, vector<double> maps_y){
-    double vs=0.0, vd=0.0, as=0.0, ad=0.0;
+    double vs=0.0, vd=0.0, as=0.0, ad=0.0, js = 0.0, jd = 0.0;
+    double vs_max=0.0, vd_max=0.0, as_max=0.0, ad_max=0.0, js_max = 0.0, jd_max = 0.0;
+    double v_max = 0.0, a_max = 0.0, j_max = 0.0;
 
     if (previous_path_x.size()>5){
-        vector<double> s_, d_, vs_, vd_, theta_;
+        vector<double> s_, d_, vs_, vd_, as_, ad_, theta_;
 
         for (int i = 0; i < previous_path_x.size() -1; i ++){
             double temp_theta = atan2((previous_path_y[i+1] - previous_path_y[i]), (previous_path_x[i+1] - previous_path_x[i]));
@@ -170,21 +185,50 @@ vector<double> getEgoReadings(vector<double> previous_path_x, vector<double> pre
             vd_.push_back(d_[j+1]-d_[j]);
             vs += (s_[j+1]-s_[j]);
             vd += (d_[j+1]-d_[j]);
+            if (vs_max < vs)
+                vs_max = vs;
+            if (vd_max < vd)
+                vd_max = vd;
+            if (sqrt(vs*vs+vd*vd) > v_max)
+                v_max = sqrt(vs*vs+vd*vd);
         }
 
         vs = vs/((s_.size()-1)*0.02);
         vd = vd/((d_.size()-1)*0.02);
 
         for (int j = 0; j < vs_.size()-1; j ++){
+            as_.push_back(vs_[j+1]-vs_[j]);
+            ad_.push_back(vd_[j+1]-vd_[j]);
             as += (vs_[j+1]-vs_[j]);
             ad += (vd_[j+1]-vd_[j]);
+            if (as_max < as)
+                as_max = as;
+            if (as_max < ad)
+                ad_max = ad;
+            if (sqrt(as*as+ad*ad) > a_max)
+                a_max = sqrt(as*as+ad*ad);
         }
         // vs / t
         as = as/((vs_.size()-1)*0.02);
         ad = ad/((vd_.size()-1)*0.02);
+
+        for (int j = 0; j < as_.size()-1; j ++){
+            js += (as_[j+1]-as_[j]);
+            jd += (ad_[j+1]-ad_[j]);
+            if (js_max < js)
+                js_max = js;
+            if (jd_max < jd)
+                jd_max = jd;
+            if (sqrt(js*js+jd*jd) > j_max)
+                j_max = sqrt(js*js+jd*jd);
+        }
+        // vs / t
+        js = js/((as_.size()-1)*0.02);
+        jd = jd/((ad_.size()-1)*0.02);
+
     }
 
-    return {vs, vd, as, ad};
+    return {vs, vd, as, ad, js, jd, vs_max, vd_max, as_max, ad_max, js_max, jd_max, v_max, a_max, j_max};
 }
 
 // Fit polynomial
@@ -226,7 +270,7 @@ double getRoadCurvature(double car_s, int lane, vector<double> maps_s, vector<do
     return pow(1 + dfdx * dfdx, 1.5) / abs(dfdx2);
 }
 
-// Generate anchor points 4 seconds into the future (after the end of the previous path)
+// Generate anchor sd points 4 seconds into the future (after the end of the previous path)
 vector<vector<double>> generateAnchors(double car_s, int prev_size, vector<vector<double>> sensor_fusion, int lane){
 
     vector<int> lanes;
@@ -261,27 +305,30 @@ vector<vector<double>> generateAnchors(double car_s, int prev_size, vector<vecto
             // Drop anchors between marks
             // 1). sort marks;
             // 2). look 60m ahead of car_s, drop anchors every 2m apart, giving other cars a buffer zone of 15m
-            sort(marks.begin(), marks.end());
-            for (int j = 1; j <= 60; j += 2){
+            // sort(marks.begin(), marks.end());
+            for (int j = 1; j < 60; j += 2){
                 bool ok_to_drop = true;
                 for (auto m: marks){
                     if (abs(car_s + j - m) < 15)
                         ok_to_drop = false;
                 }
                 if (ok_to_drop)
-                    anchors.push_back({car_s + j, 2 + l * 4});
+                    anchors.push_back({car_s + j, (double)2 + l * 4});
             }
         }
     }
     return anchors;
 }
 
-// Generate trajectory from anchor
-vector<vector<double>> generateTrajectory(vector<double> xy, vector<double> prev_path_x, vector<double> prev_path_y,
-                                         double ref_v, double ref_x, double ref_y, double ref_yaw){
+// Generate trajectory (x,y) from anchor (s, d)
+vector<vector<double>> generateTrajectory(vector<double> sd, vector<double> prev_path_x, vector<double> prev_path_y,
+                                          double ref_v,
+                                          vector<double> maps_s, vector<double> maps_x, vector<double> maps_y){
 
     vector<vector<double>> trajectory;
     vector<double> pts_x, pts_y;
+    int curLane;
+    curLane = calculateLane(sd[1]);
 
     // add two points to pts_x and pts_y
     for (int i = 2; i > 0; i --){
@@ -289,11 +336,20 @@ vector<vector<double>> generateTrajectory(vector<double> xy, vector<double> prev
         pts_y.push_back(prev_path_y[prev_path_y.size()-i]);
     }
 
+    double ref_x = pts_x[1];
+    double ref_y = pts_y[1];
+    double ref_prev_x = pts_x[0];
+    double ref_prev_y = pts_y[0];
+    double ref_yaw = atan2((ref_y - ref_prev_y), (ref_x - ref_prev_x));
+
     // add another four points to pts_x and pts_y
-    for (int i = 0; i < 4; i ++){
-        pts_x.push_back(xy[0]+15*i);
+    for (int i = 1; i <= 6; i ++){
+        vector<double> xy = getXY(sd[0]+30*i, (2+4*curLane), maps_s, maps_x, maps_y);
+
+        pts_x.push_back(xy[0]);
         pts_y.push_back(xy[1]);
     }
+
 
     // transform from global to local coordinates
     for(int i = 0; i < pts_x.size(); i++)
@@ -305,9 +361,20 @@ vector<vector<double>> generateTrajectory(vector<double> xy, vector<double> prev
         pts_y[i] = shift_x*sin(0 - ref_yaw) + shift_y*cos(0 - ref_yaw);
     }
 
+    cout << "car_s: " << sd[0] << " car_d: " << sd[1] << endl;
+    cout << "spline: " << pts_x.size()<< " " << pts_y.size() << endl;
+    for (auto px: pts_x)
+        cout << px << " ";
+    cout << endl;
+    for (auto py: pts_y)
+        cout << py << " ";
+    cout << endl;
+
     // fit spline
     tk::spline s;
     s.set_points(pts_x, pts_y);
+
+    cout << s(1.0) << endl;
 
     // populate trajectory with previous path first
     for(int i = 0; i < prev_path_x.size(); i++)
@@ -344,8 +411,47 @@ vector<vector<double>> generateTrajectory(vector<double> xy, vector<double> prev
 }
 
 // calculate cost
-double calculateCost(vector<vector<double>> trajectory, vector<vector<double>> sensor_fusion){
+double calculateCost(vector<vector<double>> trajectory, vector<double> ego_end_sd, vector<double> ego_readings,
+                     vector<vector<double>> sensor_fusion){
+
     double cost;
+    double ego_end_s = ego_end_sd[0], ego_end_d = ego_end_sd[1];
+    int ego_end_lane = calculateLane(ego_end_d);
+    double ego_vs = ego_readings[0], ego_v_max = ego_readings[12], ego_a_max = ego_readings[13], ego_j_max = ego_readings[14];
+
+    vector<double> weights = {1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
+
+    for (auto ego_xy: trajectory){
+
+        for(auto sf: sensor_fusion){
+
+            double check_car_speed = sqrt(sf[3] * sf[3] + sf[4] * sf[4]);
+            double check_car_s = sf[5];
+            check_car_s += ((double)trajectory.size() * 0.02 * check_car_speed);
+            double check_car_d = sf[6];
+            int check_car_lane = calculateLane(check_car_d);
+
+            if (ego_end_lane == check_car_lane){
+                if (abs(ego_end_s - check_car_s) <= 2.0){
+                    // add collision cost
+                    cost += 10.0;
+                } else if (abs(ego_end_s - check_car_s) <= 15.0){
+                    // add buffer cost
+                    cost += 2.0;
+                }
+            }
+        }
+    }
+
+    if(ego_v_max * 2.24 > 50.0)
+        cost += 1.0 * weights[0];
+    if(ego_a_max > 10.0)
+        cost += 1.0 * weights[1];
+    if(ego_j_max > 50.0)
+        cost += 1.0 * weights[2];
+    cost += abs(log((ego_vs * 2.24 - 50) / 50)) * weights[3];
+
+
     return cost;
 }
 
@@ -444,7 +550,7 @@ int main() {
 
                     bool too_close = false;
                     bool check_car_ahead = false;
-                    bool check_car_ahead_vs = 60.0;
+                    double check_car_ahead_vs = 60.0;
 
                     //find ref_v to use
                     for (int i = 0; i < sensor_fusion.size(); i ++){
@@ -491,6 +597,7 @@ int main() {
                     double ref_y = car_y;
                     double ref_yaw = deg2rad(car_yaw);
 
+                    // makes sure that previous_path has 2 points at least
                     if(prev_size < 2){
                         // create points tangent to the car
                         double prev_car_x = car_x - cos(deg2rad(car_yaw)) ;
@@ -502,20 +609,28 @@ int main() {
                         ptsy.push_back(prev_car_y);
                         ptsy.push_back(car_y);
 
-                    } else {
-                        // redefine reference state using previous path
-                        ref_x = previous_path_x[prev_size-1];
-                        ref_y = previous_path_y[prev_size-1];
+                        previous_path_x = ptsx;
+                        previous_path_y = ptsy;
 
-                        double ref_prev_x = previous_path_x[prev_size - 2];
-                        double ref_prev_y = previous_path_y[prev_size - 2];
-                        ref_yaw = atan2((ref_y - ref_prev_y), (ref_x - ref_prev_x));
-
-                        ptsx.push_back(ref_prev_x);
-                        ptsx.push_back(ref_x);
-                        ptsy.push_back(ref_prev_y);
-                        ptsy.push_back(ref_y);
                     }
+
+//                    else {
+//                        // redefine reference state using previous path
+//                        ref_x = previous_path_x[prev_size-1];
+//                        ref_y = previous_path_y[prev_size-1];
+//
+//                        double ref_prev_x = previous_path_x[prev_size - 2];
+//                        double ref_prev_y = previous_path_y[prev_size - 2];
+//                        ref_yaw = atan2((ref_y - ref_prev_y), (ref_x - ref_prev_x));
+//
+//                        ptsx.push_back(ref_prev_x);
+//                        ptsx.push_back(ref_x);
+//                        ptsy.push_back(ref_prev_y);
+//                        ptsy.push_back(ref_y);
+//                    }
+
+
+                    cout<< sensor_fusion[0][0] << ' ' << endl;
 
                     // TODO: find ego_readings vd [vs, vd, as, ad] abs(vd) goes above 1 when changing lanes.
                     vector<double> ego_sd;
@@ -525,79 +640,90 @@ int main() {
 
                     // TODO: use map xy to find road curvature
                     double curvature = getRoadCurvature(car_s, lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-                    cout << "d_dot: " << vd << "Road curvature: " << curvature << endl;
+                    cout << "d_dot: " << vd << " Road curvature: " << curvature << endl;
 
-                    // add more points to generate trajectory
-                    vector<double> next_wp0 = getXY(car_s+30, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
-                    vector<double> next_wp1 = getXY(car_s+60, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
-                    vector<double> next_wp2 = getXY(car_s+90, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
-
-                    ptsx.push_back(next_wp0[0]);
-                    ptsx.push_back(next_wp1[0]);
-                    ptsx.push_back(next_wp2[0]);
-
-                    ptsy.push_back(next_wp0[1]);
-                    ptsy.push_back(next_wp1[1]);
-                    ptsy.push_back(next_wp2[1]);
-
-                    for(int i = 0; i < ptsx.size(); i++)
-                    {
-                        double shift_x = ptsx[i]-ref_x;
-                        double shift_y = ptsy[i]-ref_y;
-
-                        ptsx[i] = shift_x*cos(0 - ref_yaw) - shift_y*sin(0 - ref_yaw); // yaw is +ve when turning right
-                        ptsy[i] = shift_x*sin(0 - ref_yaw) + shift_y*cos(0 - ref_yaw);
-                    }
-
-                    // adding the anchor points to ptsx and ptsy.
-                    tk::spline s;
-                    s.set_points(ptsx, ptsy);
-
-
-                    for(int i = 0; i < previous_path_x.size(); i++){
-                        next_x_vals.push_back(previous_path_x[i]);
-                        next_y_vals.push_back(previous_path_y[i]);
-                    }
-
-                    double target_x = 30.0;// plan 30m ahead along car's x direction
-                    double target_y = s(target_x);
-                    double target_distance = sqrt(target_x*target_x+target_y*target_y);//distance(0,0,target_x,target_y);
-                    double x_add_on = 0.0;
-
-
-                    for (int i = 1; i <= 50 - previous_path_x.size(); i ++){
-
-                        double N = target_distance/(ref_v/2.24*0.02);
-
-                        double x_point = x_add_on + target_x/N;
-                        double y_point = s(x_point);
-
-                        x_add_on = x_point;
-
-                        double x_ref = x_point;
-                        double y_ref = y_point;
-
-                        x_point = ref_x + x_ref*cos(ref_yaw)-y_ref*sin(ref_yaw);
-                        y_point = ref_y + x_ref*sin(ref_yaw)+y_ref*cos(ref_yaw);
-
-                        next_x_vals.push_back(x_point);
-                        next_y_vals.push_back(y_point);
-
-                    }
+//                    // add more points to generate trajectory
+//                    vector<double> next_wp0 = getXY(car_s+30, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+//                    vector<double> next_wp1 = getXY(car_s+60, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+//                    vector<double> next_wp2 = getXY(car_s+90, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+//
+//                    ptsx.push_back(next_wp0[0]);
+//                    ptsx.push_back(next_wp1[0]);
+//                    ptsx.push_back(next_wp2[0]);
+//
+//                    ptsy.push_back(next_wp0[1]);
+//                    ptsy.push_back(next_wp1[1]);
+//                    ptsy.push_back(next_wp2[1]);
+//
+//                    for(int i = 0; i < ptsx.size(); i++)
+//                    {
+//                        double shift_x = ptsx[i]-ref_x;
+//                        double shift_y = ptsy[i]-ref_y;
+//
+//                        ptsx[i] = shift_x*cos(0 - ref_yaw) - shift_y*sin(0 - ref_yaw); // yaw is +ve when turning right
+//                        ptsy[i] = shift_x*sin(0 - ref_yaw) + shift_y*cos(0 - ref_yaw);
+//                    }
+//
+//                    // adding the anchor points to ptsx and ptsy.
+//                    tk::spline s;
+//                    s.set_points(ptsx, ptsy);
+//
+//
+//                    for(int i = 0; i < previous_path_x.size(); i++){
+//                        next_x_vals.push_back(previous_path_x[i]);
+//                        next_y_vals.push_back(previous_path_y[i]);
+//                    }
+//
+//                    double target_x = 30.0;// plan 30m ahead along car's x direction
+//                    double target_y = s(target_x);
+//                    double target_distance = sqrt(target_x*target_x+target_y*target_y);//distance(0,0,target_x,target_y);
+//                    double x_add_on = 0.0;
+//
+//
+//                    for (int i = 1; i <= 50 - previous_path_x.size(); i ++){
+//
+//                        double N = target_distance/(ref_v/2.24*0.02);
+//
+//                        double x_point = x_add_on + target_x/N;
+//                        double y_point = s(x_point);
+//
+//                        x_add_on = x_point;
+//
+//                        double x_ref = x_point;
+//                        double y_ref = y_point;
+//
+//                        x_point = ref_x + x_ref*cos(ref_yaw)-y_ref*sin(ref_yaw);
+//                        y_point = ref_y + x_ref*sin(ref_yaw)+y_ref*cos(ref_yaw);
+//
+//                        next_x_vals.push_back(x_point);
+//                        next_y_vals.push_back(y_point);
+//
+//                    }
 
                     //TODO: generate/test anchor points
                     //TODO: generate/test trajectory for each anchor point
                     //TODO: calculate/test cost associated with each trajectory
 
+                    vector<vector<double>> trajectory;
 
                     if (vd < -1.1) {
                         // LCL
+                        cout << "LCL" << endl;
+                        trajectory = generateTrajectory({car_s, car_d}, previous_path_x, previous_path_y, ref_v,
+                                                        map_waypoints_s, map_waypoints_x, map_waypoints_y);
+
                     } else if (vd > 1.1) {
                         // LCR
+                        cout << "LCR" << endl;
+                        trajectory = generateTrajectory({car_s, car_d}, previous_path_x, previous_path_y, ref_v,
+                                                        map_waypoints_s, map_waypoints_x, map_waypoints_y);
+
                     } else if (curvature > 1000 & car_speed < 45.0 & check_car_ahead & check_car_ahead_vs < 45.0) {
                         // PLCL, PLCR
+                        cout << "Choose PLCL or PLCR. Car ahead speed: " << check_car_ahead_vs << endl;
+
                         vector<vector<double>> anchors;
-                        vector<vector<double>> trajectory;
+
                         vector<double> costs;
                         double cost = 9999;
 
@@ -607,29 +733,46 @@ int main() {
                             vector<double> anchor_xy = getXY(anchor[0], anchor[1], map_waypoints_s, map_waypoints_x,
                                                              map_waypoints_y);
 
-                            trajectory = generateTrajectory(anchor_xy, previous_path_x, previous_path_y, ref_v, ref_x, ref_y, ref_yaw);
+                            vector<vector<double>> temp_trajectory = generateTrajectory(anchor_xy, previous_path_x, previous_path_y,
+                                                                                        ref_v,
+                                                                                        map_waypoints_s, map_waypoints_x, map_waypoints_y);
 
-                            double temp_cost = calculateCost(trajectory, sensor_fusion);
+                            double ego_end_yaw = atan2((trajectory[50][2] - trajectory[49][2]), (trajectory[50][1] - trajectory[49][1]));
+
+                            vector<double> ego_end_sd = getFrenet(trajectory[50][1], trajectory[50][2], ego_end_yaw,
+                                                                  map_waypoints_x, map_waypoints_y);
+
+                            double temp_cost = calculateCost(trajectory, ego_end_sd, ego_sd, sensor_fusion);
 
                             costs.push_back(temp_cost);
 
                             if (temp_cost < cost){
                                 cost = temp_cost;
-                                for (int i = 0; i < 50; i ++){
-                                    next_x_vals.push_back(trajectory[i][0]);
-                                    next_y_vals.push_back(trajectory[i][1]);
-                                }
+                                trajectory = temp_trajectory;
                             }
 
                         }
 
+                        int my_lane = calculateLane(trajectory[50][1]);
+                        if (my_lane < lane)
+                            cout << "PLCL" << endl;
+                        else
+                            cout << "PLCR" << endl;
 
                     } else {
                         // KL
+                        cout << "KL" << endl;
+                        trajectory = generateTrajectory({car_s, car_d}, previous_path_x, previous_path_y, ref_v,
+                                                        map_waypoints_s, map_waypoints_x, map_waypoints_y);
                     }
 
 
                     // TODO: end
+
+                    for (int i = 0; i < 50; i ++){
+                        next_x_vals.push_back(trajectory[i][0]);
+                        next_y_vals.push_back(trajectory[i][1]);
+                    }
 
                     msgJson["next_x"] = next_x_vals;
                     msgJson["next_y"] = next_y_vals;
