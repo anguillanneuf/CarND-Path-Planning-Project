@@ -151,7 +151,7 @@ vector<double> getXY(double s, double d, vector<double> maps_s, vector<double> m
 }
 
 // Get approximate Ego vs, vd, as, ad
-vector<double> getEgoReadings(vector<double> previous_path_x, vector<double> previous_path_y, double theta, vector<double> maps_x, vector<double> maps_y){
+vector<double> getEgoReadings(vector<double> previous_path_x, vector<double> previous_path_y, vector<double> maps_x, vector<double> maps_y){
     double vs=0.0, vd=0.0, as=0.0, ad=0.0;
 
     if (previous_path_x.size()>5){
@@ -226,28 +226,30 @@ double getRoadCurvature(double car_s, int lane, vector<double> maps_s, vector<do
     return pow(1 + dfdx * dfdx, 1.5) / abs(dfdx2);
 }
 
-vector<double> generateAnchors(double car_s, int prev_size, vector<vector<double>> sensor_fusion, int lane){
-    // predict 5 seconds into the future.
+// Generate anchor points 4 seconds into the future (after the end of the previous path)
+vector<vector<double>> generateAnchors(double car_s, int prev_size, vector<vector<double>> sensor_fusion, int lane){
+
     vector<int> lanes;
     lanes.push_back(lane-1); lanes.push_back(lane+1);
-    vector<double> anchors;
+
+    vector<vector<double>> anchors;
 
     for(auto l: lanes){
         if(l > -1 | l < 3) {
-            vector<vector<double>> cars_in_lane;
+            vector<vector<double>> cars_in_lane_sf;
 
-            // i hope auto takes care of empty sensor_fusion
+            // I hope auto takes care of empty sensor_fusion
             for (auto sf: sensor_fusion) {
                 if (sf[6] < l * 4 & sf[6] > (l + 1) * 4) {
-                    cars_in_lane.push_back(sf);
+                    cars_in_lane_sf.push_back(sf);
                 }
             }
 
             vector<double> marks;
             marks.push_back(car_s + 90);
 
-            // look ahead 4 seconds at the end of the previous path
-            for(auto sf: cars_in_lane){
+            // Look ahead 4 seconds (= 400 intervals) ahead of the end of the previous path
+            for(auto sf: cars_in_lane_sf){
                 double vx = sf[3];
                 double vy = sf[4];
                 double check_speed = sqrt(vx * vx + vy * vy);
@@ -256,23 +258,95 @@ vector<double> generateAnchors(double car_s, int prev_size, vector<vector<double
                 marks.push_back(check_car_s);
             }
 
-            // drop anchors between marks
-            // 1. sort marks
-            // 2. look 60m ahead of car_s, drop anchors every 2m apart if they aren't close to any car
+            // Drop anchors between marks
+            // 1). sort marks;
+            // 2). look 60m ahead of car_s, drop anchors every 2m apart, giving other cars a buffer zone of 15m
             sort(marks.begin(), marks.end());
             for (int j = 1; j <= 60; j += 2){
-                bool ok = true;
+                bool ok_to_drop = true;
                 for (auto m: marks){
                     if (abs(car_s + j - m) < 15)
-                        ok = false;
+                        ok_to_drop = false;
                 }
-                if (ok)
-                    anchors.push_back(car_s + j);
+                if (ok_to_drop)
+                    anchors.push_back({car_s + j, 2 + l * 4});
             }
-
-
         }
     }
+    return anchors;
+}
+
+// Generate trajectory from anchor
+vector<vector<double>> generateTrajectory(vector<double> xy, vector<double> prev_path_x, vector<double> prev_path_y,
+                                         double ref_v, double ref_x, double ref_y, double ref_yaw){
+
+    vector<vector<double>> trajectory;
+    vector<double> pts_x, pts_y;
+
+    // add two points to pts_x and pts_y
+    for (int i = 2; i > 0; i --){
+        pts_x.push_back(prev_path_x[prev_path_x.size()-i]);
+        pts_y.push_back(prev_path_y[prev_path_y.size()-i]);
+    }
+
+    // add another four points to pts_x and pts_y
+    for (int i = 0; i < 4; i ++){
+        pts_x.push_back(xy[0]+15*i);
+        pts_y.push_back(xy[1]);
+    }
+
+    // transform from global to local coordinates
+    for(int i = 0; i < pts_x.size(); i++)
+    {
+        double shift_x = pts_x[i]-ref_x;
+        double shift_y = pts_y[i]-ref_y;
+
+        pts_x[i] = shift_x*cos(0 - ref_yaw) - shift_y*sin(0 - ref_yaw);
+        pts_y[i] = shift_x*sin(0 - ref_yaw) + shift_y*cos(0 - ref_yaw);
+    }
+
+    // fit spline
+    tk::spline s;
+    s.set_points(pts_x, pts_y);
+
+    // populate trajectory with previous path first
+    for(int i = 0; i < prev_path_x.size(); i++)
+        trajectory.push_back({prev_path_x[i], prev_path_y[i]});
+
+    // plan 30m ahead along car's x direction
+    double target_x = 30.0;
+    double target_y = s(target_x);
+    double target_distance = sqrt(target_x*target_x+target_y*target_y);
+    double x_add_on = 0.0;
+
+    // add on to previous path using points from spline
+    for (int i = 1; i <= 50 - prev_path_x.size(); i ++){
+
+        double N = target_distance/(ref_v/2.24*0.02);
+
+        double x_point = x_add_on + target_x/N;
+        double y_point = s(x_point);
+
+        x_add_on = x_point;
+
+        double x_ref = x_point;
+        double y_ref = y_point;
+
+        // transform from local to global coordinates
+        x_point = ref_x + x_ref*cos(ref_yaw)-y_ref*sin(ref_yaw);
+        y_point = ref_y + x_ref*sin(ref_yaw)+y_ref*cos(ref_yaw);
+
+        trajectory.push_back({x_point, y_point});
+    }
+
+    // trajectory has 50 elements now
+    return trajectory;
+}
+
+// calculate cost
+double calculateCost(vector<vector<double>> trajectory, vector<vector<double>> sensor_fusion){
+    double cost;
+    return cost;
 }
 
 int main() {
@@ -445,7 +519,7 @@ int main() {
 
                     // TODO: find ego_readings vd [vs, vd, as, ad] abs(vd) goes above 1 when changing lanes.
                     vector<double> ego_sd;
-                    ego_sd = getEgoReadings(previous_path_x, previous_path_y, car_yaw, map_waypoints_x, map_waypoints_y);
+                    ego_sd = getEgoReadings(previous_path_x, previous_path_y, map_waypoints_x, map_waypoints_y);
                     double vd = ego_sd[1];
 
 
@@ -511,20 +585,44 @@ int main() {
 
                     }
 
-                    //TODO: generate anchor points
-                    //TODO: generate trajectory for each anchor point
-                    //TODO: calculate cost associated with each trajectory
+                    //TODO: generate/test anchor points
+                    //TODO: generate/test trajectory for each anchor point
+                    //TODO: calculate/test cost associated with each trajectory
 
 
                     if (vd < -1.1) {
                         // LCL
                     } else if (vd > 1.1) {
                         // LCR
-                    } else if (curvature > 1000 & car_speed < 45.0 & check_car_ahead & check_car_ahead_vs < 45.0){
+                    } else if (curvature > 1000 & car_speed < 45.0 & check_car_ahead & check_car_ahead_vs < 45.0) {
                         // PLCL, PLCR
-                        vector<double> anchors;
-                        vector<double> trajectories;
+                        vector<vector<double>> anchors;
+                        vector<vector<double>> trajectory;
                         vector<double> costs;
+                        double cost = 9999;
+
+                        anchors = generateAnchors(car_s, prev_size, sensor_fusion, lane);
+
+                        for (auto anchor: anchors) {
+                            vector<double> anchor_xy = getXY(anchor[0], anchor[1], map_waypoints_s, map_waypoints_x,
+                                                             map_waypoints_y);
+
+                            trajectory = generateTrajectory(anchor_xy, previous_path_x, previous_path_y, ref_v, ref_x, ref_y, ref_yaw);
+
+                            double temp_cost = calculateCost(trajectory, sensor_fusion);
+
+                            costs.push_back(temp_cost);
+
+                            if (temp_cost < cost){
+                                cost = temp_cost;
+                                for (int i = 0; i < 50; i ++){
+                                    next_x_vals.push_back(trajectory[i][0]);
+                                    next_y_vals.push_back(trajectory[i][1]);
+                                }
+                            }
+
+                        }
+
 
                     } else {
                         // KL
@@ -532,11 +630,6 @@ int main() {
 
 
                     // TODO: end
-
-//                    for (auto i: sensor_fusion)
-//                        cout << i << " ";
-//                    cout << endl;
-
 
                     msgJson["next_x"] = next_x_vals;
                     msgJson["next_y"] = next_y_vals;
