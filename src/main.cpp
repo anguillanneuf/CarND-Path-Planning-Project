@@ -226,6 +226,55 @@ double getRoadCurvature(double car_s, int lane, vector<double> maps_s, vector<do
     return pow(1 + dfdx * dfdx, 1.5) / abs(dfdx2);
 }
 
+vector<double> generateAnchors(double car_s, int prev_size, vector<vector<double>> sensor_fusion, int lane){
+    // predict 5 seconds into the future.
+    vector<int> lanes;
+    lanes.push_back(lane-1); lanes.push_back(lane+1);
+    vector<double> anchors;
+
+    for(auto l: lanes){
+        if(l > -1 | l < 3) {
+            vector<vector<double>> cars_in_lane;
+
+            // i hope auto takes care of empty sensor_fusion
+            for (auto sf: sensor_fusion) {
+                if (sf[6] < l * 4 & sf[6] > (l + 1) * 4) {
+                    cars_in_lane.push_back(sf);
+                }
+            }
+
+            vector<double> marks;
+            marks.push_back(car_s + 90);
+
+            // look ahead 4 seconds at the end of the previous path
+            for(auto sf: cars_in_lane){
+                double vx = sf[3];
+                double vy = sf[4];
+                double check_speed = sqrt(vx * vx + vy * vy);
+                double check_car_s = sf[5];
+                check_car_s += ((double)(prev_size + 200) * 0.02 * check_speed);
+                marks.push_back(check_car_s);
+            }
+
+            // drop anchors between marks
+            // 1. sort marks
+            // 2. look 60m ahead of car_s, drop anchors every 2m apart if they aren't close to any car
+            sort(marks.begin(), marks.end());
+            for (int j = 1; j <= 60; j += 2){
+                bool ok = true;
+                for (auto m: marks){
+                    if (abs(car_s + j - m) < 15)
+                        ok = false;
+                }
+                if (ok)
+                    anchors.push_back(car_s + j);
+            }
+
+
+        }
+    }
+}
+
 int main() {
     uWS::Hub h;
 
@@ -320,11 +369,16 @@ int main() {
                         car_s = end_path_s;
 
                     bool too_close = false;
+                    bool check_car_ahead = false;
+                    bool check_car_ahead_vs = 60.0;
 
                     //find ref_v to use
                     for (int i = 0; i < sensor_fusion.size(); i ++){
                         float d = sensor_fusion[i][6];
+                        double closest_distance = 100.0;
+
                         if (d > 4 * lane & d < 4 * (lane + 1)){
+                            check_car_ahead = true;
                             double vx = sensor_fusion[i][3];
                             double vy = sensor_fusion[i][4];
                             double check_speed = sqrt(vx * vx + vy * vy);
@@ -340,6 +394,13 @@ int main() {
                                 if (lane > 0)
                                     lane = 0;
                             }
+
+                            // determine the speed of the first car ahead
+                            if ((check_car_s - car_s) < closest_distance){
+                                closest_distance = check_car_s - car_s;
+                                check_car_ahead_vs = check_speed;
+                            }
+
                         }
                     }
 
@@ -382,14 +443,15 @@ int main() {
                         ptsy.push_back(ref_y);
                     }
 
-                    // TODO: find ego_readings vd [vs, vd, as, ad]
-                    vector<double> ego_readings = getEgoReadings(previous_path_x, previous_path_y, car_yaw, map_waypoints_x, map_waypoints_y);
-                    double vd = ego_readings[1];
-                    cout << "d_dot: " << vd << endl; // abs(vd) goes above 1 when changing lanes.
+                    // TODO: find ego_readings vd [vs, vd, as, ad] abs(vd) goes above 1 when changing lanes.
+                    vector<double> ego_sd;
+                    ego_sd = getEgoReadings(previous_path_x, previous_path_y, car_yaw, map_waypoints_x, map_waypoints_y);
+                    double vd = ego_sd[1];
+
 
                     // TODO: use map xy to find road curvature
                     double curvature = getRoadCurvature(car_s, lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-                    cout << "Road curvature: " << curvature << endl;// R_curve < 50.0
+                    cout << "d_dot: " << vd << "Road curvature: " << curvature << endl;
 
                     // add more points to generate trajectory
                     vector<double> next_wp0 = getXY(car_s+30, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
@@ -453,6 +515,20 @@ int main() {
                     //TODO: generate trajectory for each anchor point
                     //TODO: calculate cost associated with each trajectory
 
+
+                    if (vd < -1.1) {
+                        // LCL
+                    } else if (vd > 1.1) {
+                        // LCR
+                    } else if (curvature > 1000 & car_speed < 45.0 & check_car_ahead & check_car_ahead_vs < 45.0){
+                        // PLCL, PLCR
+                        vector<double> anchors;
+                        vector<double> trajectories;
+                        vector<double> costs;
+
+                    } else {
+                        // KL
+                    }
 
 
                     // TODO: end
