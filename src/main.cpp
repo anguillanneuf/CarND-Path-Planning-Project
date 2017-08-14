@@ -15,6 +15,11 @@ using namespace std;
 // for convenience
 using json = nlohmann::json;
 
+struct Ego{
+    string state;
+    int goal_lane;
+};
+
 // For converting back and forth between radians and degrees.
 constexpr double pi() { return M_PI; }
 
@@ -489,7 +494,7 @@ double calculateCost(vector<vector<double>> trajectory, vector<double> ego_end_s
         }
     }
 
-    cout << "cost: " << cost;
+//    cout << "cost: " << cost;
     if(ego_v_max * 2.24 > 50.0)
         cost += 1.0 * weights[1];
     if(ego_a_max > 10.0)
@@ -497,7 +502,7 @@ double calculateCost(vector<vector<double>> trajectory, vector<double> ego_end_s
     if(ego_j_max > 50.0)
         cost += 1.0 * weights[3];
     cost += (2.0/(1+exp(50.0 - ego_v * 2.24))-1.0) * weights[4];
-    cout << ", " << cost << endl;
+//    cout << ", " << cost << endl;
 
     return cost;
 }
@@ -540,8 +545,9 @@ int main() {
     }
 
     double ref_v = 0.0;
+    struct Ego ego;
 
-    h.onMessage([&ref_v, &map_waypoints_x, &map_waypoints_y, &map_waypoints_s, &map_waypoints_dx, &map_waypoints_dy](
+    h.onMessage([&ref_v, &map_waypoints_x, &map_waypoints_y, &map_waypoints_s, &map_waypoints_dx, &map_waypoints_dy, &ego](
             uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
             uWS::OpCode opCode) {
         // "42" at the start of the message means there's a websocket message event.
@@ -588,7 +594,9 @@ int main() {
                     // TODO: define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
 
                     int prev_size = previous_path_x.size();
-                    int lane = calculateLane(car_d);
+                    int cur_lane = calculateLane(car_d);
+                    ego.state = "KL";
+                    ego.goal_lane = 1;
 
                     if (prev_size > 0)
                         car_s = end_path_s;
@@ -602,7 +610,7 @@ int main() {
                         float d = sensor_fusion[i][6];
                         double closest_distance = 100.0;
 
-                        if (d > 4 * lane & d < 4 * (lane + 1)){
+                        if (d > 4 * cur_lane & d < 4 * (cur_lane + 1)){
                             check_car_ahead = true;
                             double vx = sensor_fusion[i][3];
                             double vy = sensor_fusion[i][4];
@@ -615,14 +623,12 @@ int main() {
                             if ((check_car_s > car_s) & (check_car_s - car_s < 30)){
                                 //ref_v = 30;
                                 too_close = true;
+                                // determine the speed of the first car ahead
+                                if ((check_car_s - car_s) < closest_distance){
+                                    closest_distance = check_car_s - car_s;
+                                    check_car_ahead_vs = check_speed; // m/s
+                                }
                             }
-
-                            // determine the speed of the first car ahead
-                            if ((check_car_s - car_s) < closest_distance){
-                                closest_distance = check_car_s - car_s;
-                                check_car_ahead_vs = check_speed;
-                            }
-
                         }
                     }
 
@@ -679,28 +685,38 @@ int main() {
 
                     int end_lane = laneAndTrajectory.first;
 
-                    if (vd < -1.1 | lane > end_lane) {
-                        // LCL
-                        cout << "LCL" << endl;
+                    if (ego.state == "LCL") {
+
+                        if (abs(ego.goal_lane * 4 + 2 - car_d) < 0.5){
+                            ego.state = "KL";
+                            goto KL;
+                        }
+//                        else{
+                            // update trajectory
 //                        trajectory = generateTrajectory({car_s, car_d}, previous_path_x, previous_path_y, ref_v,
 //                                                        map_waypoints_s, map_waypoints_x, map_waypoints_y);
+//                        }
+                    } else if (ego.state == "LCR") {
 
-                    } else if (vd > 1.1 | lane < end_lane) {
-                        // LCR
-                        cout << "LCR" << endl;
+                        if (abs(ego.goal_lane * 4 + 2 - car_d) < 0.5){
+                            ego.state = "KL";
+                            goto KL;
+                        }
+//                        else{
+                            // update trajectory
 //                        trajectory = generateTrajectory({car_s, car_d}, previous_path_x, previous_path_y, ref_v,
 //                                                        map_waypoints_s, map_waypoints_x, map_waypoints_y);
+//                        }
+                    } else if ((car_speed < 45.0) & (check_car_ahead) & (check_car_ahead_vs < 45.0/2.24)) {
 
-                    } else if ((car_speed < 45.0) & (check_car_ahead) & (check_car_ahead_vs < 45.0)) {
-                        // PLCL, PLCR
-                        cout << "Choose PLCL or PLCR. Car ahead speed: " << check_car_ahead_vs << endl;
+//                        cout << "Choose PLCL or PLCR. Car ahead speed: " << check_car_ahead_vs*2.24 << endl;
 
                         vector<vector<double>> anchors;
 
                         vector<double> costs;
                         double cost = 9999;
 
-                        anchors = generateAnchors(car_s, prev_size, sensor_fusion, lane);
+                        anchors = generateAnchors(car_s, prev_size, sensor_fusion, cur_lane);
 //                        cout << "first anchor: " << anchors[0][0] << " " << anchors[0][1] << endl;
 
                         for (auto anchor: anchors) {
@@ -727,25 +743,29 @@ int main() {
 
                         }
 
-                        cout << "lowest cost for PLC: " << cost << endl;
+//                        cout << "lowest cost for PLC: " << cost << endl;
 
-                        if (cost > 12 | end_lane == lane){
+                        if (cost > 12){
                             goto KL;
+                        } else if (end_lane < cur_lane){
+                                ego.state = "LCL";
+                                ego.goal_lane = cur_lane - 1;
                         } else {
-                            if (end_lane < lane)
-                                cout << "PLCL" << endl;
-                            else
-                                cout << "PLCR" << endl;
+                                ego.state = "LCR";
+                                ego.goal_lane = cur_lane + 1;
                         }
 
                     } else {
-                        // KL
                         KL:
-                        cout << "KL" << endl;
+                        ego.state = "KL";
+                        ego.goal_lane = cur_lane;
+                        // update trajectory
+
 //                        trajectory = generateTrajectory({car_s, car_d}, previous_path_x, previous_path_y, ref_v,
 //                                                        map_waypoints_s, map_waypoints_x, map_waypoints_y);
                     }
 
+                    cout << ego.state << " goal_lane: " << ego.goal_lane << endl;
 
                     // TODO: end
 
