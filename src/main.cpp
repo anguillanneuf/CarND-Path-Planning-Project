@@ -18,6 +18,7 @@ using json = nlohmann::json;
 struct Ego{
     string state;
     int goal_lane;
+    double goal_s;
 };
 
 // For converting back and forth between radians and degrees.
@@ -29,6 +30,22 @@ double rad2deg(double x) { return x * 180 / pi(); }
 
 double logistic(double x){
     return 2.0 / (1 + exp(-x)) - 1.0;
+}
+
+double meanOfVector(vector<double> x){
+    double tot;
+    for(auto i: x)
+        tot += i;
+    return tot/x.size();
+}
+
+double maxofVector(vector<double> x){
+    double biggest = -9999;
+    for(auto i: x) {
+        if (biggest < i)
+            biggest = i;
+    }
+    return biggest;
 }
 
 // Checks if the SocketIO event has JSON data.
@@ -166,8 +183,10 @@ int calculateLane(double d){
         lane = 0;
     } else if (d >4.0 & d <= 8.0) {
         lane = 1;
-    } else{
+    } else if (d > 8.0 & d < 12.0){
         lane = 2;
+    } else{
+        lane = -1;
     }
     return lane;
 }
@@ -183,115 +202,74 @@ vector<double> getFrenetFromTrajectory(vector<vector<double>> trajectory, vector
     return end_sd;
 }
 
-// Get approximate Ego readings given a path or trajectory
-vector<double> getEgoReadings(vector<vector<double>> trajectory, vector<double> maps_x, vector<double> maps_y){
-    double vs=0.0, vd=0.0, as=0.0, ad=0.0, js = 0.0, jd = 0.0, vx=0.0, vy=0.0, ax=0.0, ay=0.0, jx=0.0, jy=0.0;
-    double vs_max=0.0, vd_max=0.0, as_max=0.0, ad_max=0.0, js_max = 0.0, jd_max = 0.0,
-            vx_max=0.0, vy_max=0.0, ax_max=0.0, ay_max=0.0, jx_max = 0.0, jy_max = 0.0;
-    double v_max = 0.0, a_max = 0.0, j_max = 0.0, v = 0.0;
+// Get trajectory readings s[], d[], v[], a[], j[], given a trajectory (x[],y[])
+vector<vector<double>> getTrajectoryReadings(vector<vector<double>> trajectory, vector<double> maps_x, vector<double> maps_y){
 
-    vector<double> previous_path_x, previous_path_y;
+    vector<double> x, y, theta, s, d, vx, vy, vxy, vs, vd, vsd, ax, ay, axy, as, ad, asd, jx, jy, jxy, js, jd, jsd;
+
     for(int i = 0; i < trajectory.size(); i++){
-        previous_path_x.push_back(trajectory[i][0]);
-        previous_path_y.push_back(trajectory[i][1]);
+        x.push_back(trajectory[i][0]);
+        y.push_back(trajectory[i][1]);
     }
 
-    if (previous_path_x.size()>5){
-        vector<double> s_, d_, vs_, vd_, as_, ad_, theta_, vx_, vy_, ax_, ay_, v_;
+    if (x.size()>5){
 
-        for (int i = 0; i < previous_path_x.size() -1; i ++){
-            double temp_theta = atan2((previous_path_y[i+1] - previous_path_y[i]), (previous_path_x[i+1] - previous_path_x[i]));
-            theta_.push_back(temp_theta);
-            vector<double> temp = getFrenet(previous_path_x[i+1], previous_path_y[i+1], temp_theta, maps_x, maps_y);
-            s_.push_back(temp[0]);
-            d_.push_back(temp[1]);
-        }
-        // s / t
-        for (int j = 0; j < s_.size()-1; j ++){
-            vs_.push_back(s_[j+1]-s_[j]);
-            vd_.push_back(d_[j+1]-d_[j]);
-            vs += (s_[j+1]-s_[j]);
-            vd += (d_[j+1]-d_[j]);
-            if (vs_max < vs)
-                vs_max = vs;
-            if (vd_max < vd)
-                vd_max = vd;
-            vx_.push_back(previous_path_x[j+1]-previous_path_x[j]);
-            vy_.push_back(previous_path_y[j+1]-previous_path_y[j]);
-            vx += previous_path_x[j+1]-previous_path_x[j];
-            vy += previous_path_y[j+1]-previous_path_y[j];
-            if (vx_max < vx)
-                vx_max = vx;
-            if (vy_max < vy)
-                vy_max = vy;
-            if (sqrt(vx*vx+vy*vy) > v_max)
-                v_max = sqrt(vx*vx+vy*vy);
-            v_.push_back(sqrt(vx*vx+vy*vy));
-            v += sqrt(vx*vx+vy*vy);
+        for (int i = 0; i < x.size() -1; i ++){
+            double temp_theta = atan2((y[i+1] - y[i]), (x[i+1] - x[i]));
+            theta.push_back(temp_theta);
+            vector<double> temp_sd = getFrenet(x[i+1], y[i+1], temp_theta, maps_x, maps_y);
+            s.push_back(temp_sd[0]);
+            d.push_back(temp_sd[1]);
         }
 
-        vs = vs/((s_.size()-1)*0.02);
-        vd = vd/((d_.size()-1)*0.02);
-        vx = vx/((previous_path_x.size()-1)*0.02);
-        vy = vy/((previous_path_y.size()-1)*0.02);
-        v = v/((v_.size()-1)*0.02);
+        for (int j = 0; j < s.size()-1; j ++){
+            double temp_vs = (s[j+1]-s[j])/0.02;
+            double temp_vd = (d[j+1]-d[j])/0.02;
+            double temp_vx = (x[j+1]-x[j])/0.02;
+            double temp_vy = (y[j+1]-y[j])/0.02;
 
-        for (int j = 0; j < vs_.size()-1; j ++){
-            as_.push_back(vs_[j+1]-vs_[j]);
-            ad_.push_back(vd_[j+1]-vd_[j]);
-            as += (vs_[j+1]-vs_[j]);
-            ad += (vd_[j+1]-vd_[j]);
-            if (as_max < as)
-                as_max = as;
-            if (as_max < ad)
-                ad_max = ad;
-            ax_.push_back(vx_[j+1]-vx_[j]);
-            ay_.push_back(vy_[j+1]-vy_[j]);
-            ax += vx_[j+1]-vx_[j];
-            ay += vy_[j+1]-vy_[j];
-            if (ax_max < ax)
-                ax_max = ax;
-            if (ay_max < ay)
-                ay_max = ay;
-            if (sqrt(ax*ax+ay*ay) > a_max)
-                a_max = sqrt(ax*ax+ay*ay);
-        }
-        // vs / t
-        as = as/((vs_.size()-1)*0.02);
-        ad = ad/((vd_.size()-1)*0.02);
-        ax = ax/((vx_.size()-1)*0.02);
-        ay = ay/((vy_.size()-1)*0.02);
+            vs.push_back(temp_vs);
+            vd.push_back(temp_vd);
+            vx.push_back(temp_vx);
+            vy.push_back(temp_vy);
 
-        for (int j = 0; j < as_.size()-1; j ++){
-            js += (as_[j+1]-as_[j]);
-            jd += (ad_[j+1]-ad_[j]);
-            if (js_max < js)
-                js_max = js;
-            if (jd_max < jd)
-                jd_max = jd;
-            jx += ax_[j+1]-ax_[j];
-            jy += ay_[j+1]-ay_[j];
-            if (jx_max < jx)
-                jx_max = jx;
-            if (jy_max < jy)
-                jy_max = jy;
-            if (sqrt(jx*jx+jy*jy) > j_max)
-                j_max = sqrt(jx*jx+jy*jy);
+            vsd.push_back(sqrt(temp_vs*temp_vs + temp_vd*temp_vd));
+            vxy.push_back(sqrt(temp_vx*temp_vx + temp_vy*temp_vy));
         }
 
-        // vs / t
-        js = js/((as_.size()-1)*0.02);
-        jd = jd/((ad_.size()-1)*0.02);
-        jx = jx/((ax_.size()-1)*0.02);
-        jy = jy/((ay_.size()-1)*0.02);
+        for (int j = 0; j < vs.size()-1; j ++){
+            double temp_as = (vs[j+1]-vs[j])/0.02;
+            double temp_ad = (vd[j+1]-vd[j])/0.02;
+            double temp_ax = (vx[j+1]-vx[j])/0.02;
+            double temp_ay = (vy[j+1]-vy[j])/0.02;
+
+            as.push_back(temp_as);
+            ad.push_back(temp_ad);
+            ax.push_back(temp_ax);
+            ay.push_back(temp_ay);
+
+            asd.push_back(sqrt(temp_as*temp_as + temp_ad*temp_ad));
+            axy.push_back(sqrt(temp_ax*temp_ax + temp_ay*temp_ay));
+        }
+
+        for (int j = 0; j < as.size()-1; j ++){
+            double temp_js = (as[j+1]-as[j])/0.02;
+            double temp_jd = (ad[j+1]-ad[j])/0.02;
+            double temp_jx = (ax[j+1]-ax[j])/0.02;
+            double temp_jy = (ay[j+1]-ay[j])/0.02;
+
+            js.push_back(temp_js);
+            jd.push_back(temp_jd);
+            jx.push_back(temp_jx);
+            jy.push_back(temp_jy);
+
+            jsd.push_back(sqrt(temp_js*temp_js + temp_jd*temp_jd));
+            jxy.push_back(sqrt(temp_jx*temp_jx + temp_jy*temp_jy));
+        }
 
     }
 
-    return {vs, vd, as, ad, js, jd,
-            vs_max, vd_max, as_max, ad_max, js_max, jd_max,
-            vx, vy, ax, ay, jx, jy,
-            vx_max, vd_max, as_max, ad_max, js_max, jd_max,
-            v_max, a_max, j_max, v};
+    return {s, d, vsd, vxy, asd, axy, jsd, jxy};
 }
 
 // Fit polynomial
@@ -465,8 +443,7 @@ vector<vector<double>> generateTrajectoryFromGoalLane(vector<double> sd, vector<
 }
 
 // Generate trajectory (x,y) from anchor (s, d)
-pair<int, vector<vector<double>>> generateTrajectory(vector<double> sd, vector<double> prev_path_x, vector<double> prev_path_y,
-                                          double ref_v,
+pair<int, vector<vector<double>>> generateTrajectory(vector<double> sd, vector<double> prev_path_x, vector<double> prev_path_y, double ref_v,
                                           vector<double> maps_s, vector<double> maps_x, vector<double> maps_y){
 
     pair<int, vector<vector<double>>> laneAndTrajectory;
@@ -553,51 +530,93 @@ pair<int, vector<vector<double>>> generateTrajectory(vector<double> sd, vector<d
 }
 
 // calculate cost
-double calculateCost(vector<vector<double>> trajectory, vector<double> ego_begin_sd, vector<double> ego_end_sd, vector<double> ego_readings,
-                     vector<vector<double>> sensor_fusion, int ego_goal_lane){
+double calculateCost(vector<vector<double>> trajectory, vector<vector<double>> ego_readings,
+                     vector<vector<double>> sensor_fusion, int ego_goal_lane, double car_ahead_speed){
 
-    double cost;
-    double ego_end_s = ego_end_sd[0], ego_end_d = ego_end_sd[1];
-//    int ego_end_lane = calculateLane(ego_end_d);
-    double ego_v_max = ego_readings[24], ego_a_max = ego_readings[25], ego_j_max = ego_readings[26], ego_v = ego_readings[27];
+    double cost = 0.0;
 
-    double colli = 0.0, buffer = 0.0, v_lim = 0.0, a_lim = 0.0, j_lim = 0.0, effi;
+    vector<double> s, d, vsd, vxy, asd, axy, jsd, jxy;
+    s = ego_readings[0];
+    d = ego_readings[1];
+    vsd = ego_readings[2];
+    vxy = ego_readings[3];
+    asd = ego_readings[4];
+    axy = ego_readings[5];
+    jsd = ego_readings[6];
+    jxy = ego_readings[7];
+
+    double ego_end_s = s[s.size()-1];
+    double ego_end_d = d[d.size()-1];
+    double ego_vsd_max = maxofVector(vsd), ego_vxy_max = maxofVector(vxy);
+    double ego_asd_max = maxofVector(asd), ego_axy_max = maxofVector(asd);
+    double ego_jsd_max = maxofVector(jsd), ego_jxy_max = maxofVector(jsd);
+    double ego_vsd_mean = meanOfVector(vsd), ego_vxy_mean = meanOfVector(vxy);
+    double ego_asd_mean = meanOfVector(asd), ego_axy_mean = meanOfVector(axy);
+    double ego_jsd_mean = meanOfVector(jsd), ego_jxy_mean = meanOfVector(jxy);
+
+    double colli = 0.0, buffer = 0.0, v_lim = 0.0, a_lim = 0.0, j_lim = 0.0, effi = 0.0, road_lim = 0.0;
+
     double COLLISION_COST = 10.0;
     double BUFFER_COST = 1.0;
     double EFFICIENCY_COST = 1.0;
 
-    for (auto ego_xy: trajectory){
+    int ego_cur_lane = calculateLane(d[0]);
 
-        for(auto sf: sensor_fusion){
+//    for (int i = 0; i < s.size(); i++){
 
-            double check_car_speed = sqrt(sf[3] * sf[3] + sf[4] * sf[4]);
-            double check_car_s = sf[5];
-            check_car_s += ((double)trajectory.size() * 0.02 * check_car_speed);
-            double check_car_d = sf[6];
-            int check_car_lane = calculateLane(check_car_d);
+    for(auto sf: sensor_fusion){
 
-            if (ego_goal_lane == check_car_lane){
-                if ((ego_end_s > check_car_s && ego_end_s - check_car_s < 15) | (ego_end_s < check_car_s && check_car_s - ego_end_s < 15)){
-                    colli += (1.0 * COLLISION_COST);
-                } else {
-                    buffer += (1/exp(abs(ego_end_s - check_car_s) - 15.0) * BUFFER_COST);
-                }
+        double check_car_speed = sqrt(sf[3] * sf[3] + sf[4] * sf[4]);
+        double check_car_s0 = sf[5];
+        double check_car_s = check_car_s0 + ((double)trajectory.size() * 0.02 * check_car_speed);
+        double check_car_d = sf[6];
+        int check_car_lane = calculateLane(check_car_d);
+
+        // check both cur_lane and goal_lane for collision and buffer using s
+        if (((ego_goal_lane == check_car_lane))){
+            if ((ego_end_s > check_car_s && ego_end_s - check_car_s < 15) | (ego_end_s < check_car_s && check_car_s - ego_end_s < 15)){
+                colli += (1.0 * COLLISION_COST);
+                goto Out;
+            } else if (abs(check_car_d - d[0]) < 3.0) {
+                buffer += (1-logistic(abs(check_car_s - ego_end_s)) * BUFFER_COST);
             }
+        }
+
+//        for (int i = 0; i < s.size(); i ++){
+//            check_car_s = check_car_s0 + ((double)i * 0.02 * check_car_speed);
+//            if (((ego_goal_lane == check_car_lane) || (ego_cur_lane == check_car_lane))){
+//                if ((s[i] > check_car_s && s[i] - check_car_s < 15) | (s[i] < check_car_s && check_car_s - s[i] < 15)){
+//                    colli += (1.0 * COLLISION_COST);
+//                    goto Out;
+//                }
+//            }
+//        }
+
+    }
+//    }
+
+    if(ego_vxy_max * 2.24 > 49.5||ego_vsd_max * 2.24 > 49.5)
+        v_lim = 1.0;
+    if(ego_axy_max > 10.0 || ego_asd_max > 10.0)
+        a_lim = 1.0;
+    if(ego_jxy_max > 50.0 || ego_jsd_max > 50.0)
+        j_lim = 1.0;
+
+    for(auto i: d){
+        int temp_lane = calculateLane(i);
+        if (temp_lane < -1){
+            road_lim = 10.0;
+            goto Out;
         }
     }
 
-    if(ego_v_max * 2.24 > 50.0)
-        v_lim = 1.0;
-    if(ego_a_max > 10.0)
-        a_lim = 1.0;
-    if(ego_j_max > 50.0)
-        j_lim = 1.0;
+    effi = logistic(abs(49.5 - ego_vxy_mean * 2.24)/50.0) * EFFICIENCY_COST;
 
-    effi = logistic(50.0 - ego_v * 2.24) * EFFICIENCY_COST;
+    Out:
+    cost = colli + buffer + v_lim + a_lim + j_lim + effi + road_lim;
 
-    cost = colli + buffer + v_lim + a_lim + j_lim + effi;
-
-    cout << cost << ": "<< colli << ", " << buffer << ", " << v_lim << ", " << a_lim << ", " << j_lim << ", " << effi <<endl;
+    if (cost < 10)
+        cout << cost << ": "<< colli << ", " << buffer << ", " << v_lim << ", " << a_lim << ", " << j_lim << ", " << effi <<endl;
 
     return cost;
 }
@@ -641,8 +660,9 @@ int main() {
 
     double ref_v = 0.0;
     struct Ego ego;
-    ego.state = "KL";
+    ego.state = "START";
     ego.goal_lane = 1;
+    ego.goal_s = 0.0;
 
     h.onMessage([&ref_v, &map_waypoints_x, &map_waypoints_y, &map_waypoints_s, &map_waypoints_dx, &map_waypoints_dy, &ego](
             uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
@@ -667,6 +687,8 @@ int main() {
                     // Main car's localization Data
                     double car_x = j[1]["x"];
                     double car_y = j[1]["y"];
+                    double car_s0 = j[1]["s"];
+                    double car_d0 = j[1]["d"];
                     double car_s = j[1]["s"];
                     double car_d = j[1]["d"];
                     double car_yaw = j[1]["yaw"]; // in degrees
@@ -693,7 +715,7 @@ int main() {
                     struct Ego ego_ = ego;
 
                     int prev_size = previous_path_x.size();
-                    int cur_lane = calculateLane(car_d);
+                    int cur_lane = calculateLane(car_d0);
 
                     bool too_close_ahead = false;
                     bool check_car_ahead = false;
@@ -705,7 +727,6 @@ int main() {
                         car_s = end_path_s;
                     }
 
-                    double car_s0 = j[1]["s"];
                     double adjacent_speed = 100.0;
 
                     //find ref_v to use
@@ -724,7 +745,7 @@ int main() {
                             check_car_s = check_car_s0 + ((double)prev_size*0.02*check_speed); // when ego gets to the end of
                             // the previous trajectory, where would the other car be
 
-                            if (((check_car_s > car_s) && (check_car_s - car_s < 30) && (check_car_s0 > car_s0))){
+                            if ((ego.state == "KL") && ((check_car_s > car_s) && (check_car_s - car_s < 30) && (check_car_s0 > car_s0))){
 
                                 too_close_ahead = true;
                                 // determine the speed of the first car ahead
@@ -771,7 +792,7 @@ int main() {
 
                     // TODO: use map xy to find road curvature
                     double curvature = getRoadCurvature(car_x, car_y, car_yaw, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-                    cout << "Road curvature: " << curvature << endl;
+//                    cout << "Road curvature: " << curvature << endl;
 
                     vector<vector<double>> trajectory;
 
@@ -779,7 +800,8 @@ int main() {
 
                     if (ego.state == "LCL") {
 
-                        if (abs(ego.goal_lane * 4 + 2 - car_d) < 1.0){
+                        if (abs(ego.goal_lane * 4 + 2 - car_d) < 1.0 && car_s0 - ego.goal_s > 30.0){
+                            cout << "LCL completed" << endl;
                             ego.state = "KL";
                             goto KL;
                         }
@@ -789,7 +811,8 @@ int main() {
                         }
                     } else if (ego.state == "LCR") {
 
-                        if (abs(ego.goal_lane * 4 + 2 - car_d) < 1.0){
+                        if (abs(ego.goal_lane * 4 + 2 - car_d) < 1.0 && car_s0 - ego.goal_s > 30.0){
+                            cout << "LCR completed" << endl;
                             ego.state = "KL";
                             goto KL;
                         }
@@ -797,9 +820,7 @@ int main() {
                             trajectory = generateTrajectoryFromGoalLane({car_s, car_d}, previous_path_x, previous_path_y, ref_v, ego.goal_lane,
                                                                         map_waypoints_s, map_waypoints_x, map_waypoints_y);
                         }
-                    } else if ((car_speed < 45.0) && (check_car_ahead) && (check_car_ahead_vs < 45.0/2.24) && curvature > 400.0) {
-
-                        cout << "Choose PLCL or PLCR" << endl;
+                    } else if ((car_speed < 45.0) && (check_car_ahead) && (check_car_ahead_vs < 45.0/2.24) && curvature > 800.0) {
 
                         vector<vector<double>> anchors;
                         int anchor_lane;
@@ -812,33 +833,18 @@ int main() {
 
                             pair<int, vector<vector<double>>> temp_laneAndTrajectory;
                             vector<vector<double>> temp_trajectory;
-                            vector<double> ego_end_sd;
                             int temp_lane = calculateLane(anchor[1]);
                             int goal_lane;
-
-                            if(temp_lane < cur_lane){
-                                ego.state = "PLCL";
-                                goal_lane = cur_lane - 1;
-                                if (ego.goal_lane < 0)
-                                    continue;
-                            } else {
-                                ego.state = "PLCR";
-                                goal_lane = cur_lane + 1;
-                                if (ego.goal_lane > 2)
-                                    continue;
-                            }
 
                             temp_laneAndTrajectory = generateTrajectory(anchor, previous_path_x, previous_path_y, ref_v,
                                                                         map_waypoints_s, map_waypoints_x, map_waypoints_y);
 
                             temp_trajectory = temp_laneAndTrajectory.second;
 
-                            ego_end_sd = getFrenetFromTrajectory(temp_trajectory, map_waypoints_x, map_waypoints_y);
+                            vector<vector<double>> ego_readings;
+                            ego_readings = getTrajectoryReadings(temp_trajectory, map_waypoints_x, map_waypoints_y);
 
-                            vector<double> ego_readings;
-                            ego_readings = getEgoReadings(temp_trajectory, map_waypoints_x, map_waypoints_y);
-
-                            double temp_cost = calculateCost(temp_trajectory, {car_s, car_d}, ego_end_sd, ego_readings, sensor_fusion, goal_lane);
+                            double temp_cost = calculateCost(temp_trajectory, ego_readings, sensor_fusion, goal_lane, check_car_ahead_vs);
 
                             costs.push_back(temp_cost);
 
@@ -846,17 +852,22 @@ int main() {
                                 cost = temp_cost;
                                 trajectory = temp_trajectory;
                                 anchor_lane = temp_lane;
+                                ego.goal_s = ego_readings[0][ego_readings[0].size()-1];
                             }
                         }
 
                         if (cost > 10 | anchor_lane < 0 || anchor_lane > 2) {
                             goto KL;
                         }else if (anchor_lane < cur_lane){
+                            ego.state = "PLCL";
                             cout << ego.state << endl;
+                            cout << "LCL started" << endl;
                             ego.state = "LCL";
                             ego.goal_lane = cur_lane - 1;
                         } else {
+                            ego.state = "PLCR";
                             cout << ego.state << endl;
+                            cout << "LCR started" << endl;
                             ego.state = "LCR";
                             ego.goal_lane = cur_lane + 1;
                         }
