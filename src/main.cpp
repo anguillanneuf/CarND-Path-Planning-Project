@@ -531,7 +531,7 @@ pair<int, vector<vector<double>>> generateTrajectory(vector<double> sd, vector<d
 
 // calculate cost
 double calculateCost(vector<vector<double>> trajectory, vector<vector<double>> ego_readings,
-                     vector<vector<double>> sensor_fusion, int ego_goal_lane, double car_ahead_speed){
+                     vector<vector<double>> sensor_fusion, int ego_goal_lane, double car_ahead_speed, vector<double> ego_begin_sd){
 
     double cost = 0.0;
 
@@ -554,13 +554,17 @@ double calculateCost(vector<vector<double>> trajectory, vector<vector<double>> e
     double ego_asd_mean = meanOfVector(asd), ego_axy_mean = meanOfVector(axy);
     double ego_jsd_mean = meanOfVector(jsd), ego_jxy_mean = meanOfVector(jxy);
 
-    double colli = 0.0, buffer = 0.0, v_lim = 0.0, a_lim = 0.0, j_lim = 0.0, effi = 0.0, road_lim = 0.0;
+    double colli = 0.0, buffer = 0.0, v_lim = 0.0, a_lim = 0.0, j_lim = 0.0, effi = 0.0, road_lim = 0.0, baffled = 0.0;
 
     double COLLISION_COST = 10.0;
     double BUFFER_COST = 1.0;
     double EFFICIENCY_COST = 1.0;
 
     int ego_cur_lane = calculateLane(d[0]);
+
+    int car_ahead_id = -1;
+    double car_ahead_s = -1;
+    double car_ahead_v = -1;
 
 //    for (int i = 0; i < s.size(); i++){
 
@@ -571,14 +575,26 @@ double calculateCost(vector<vector<double>> trajectory, vector<vector<double>> e
         double check_car_s = check_car_s0 + ((double)trajectory.size() * 0.02 * check_car_speed);
         double check_car_d = sf[6];
         int check_car_lane = calculateLane(check_car_d);
+        double closest_dist_ahead = 999;
 
         // check both cur_lane and goal_lane for collision and buffer using s
-        if (((ego_goal_lane == check_car_lane))){
-            if ((ego_end_s > check_car_s && ego_end_s - check_car_s < 15) | (ego_end_s < check_car_s && check_car_s - ego_end_s < 15)){
+        if (ego_goal_lane == check_car_lane){
+            if ((ego_end_s > check_car_s && ego_end_s - check_car_s < 15) || (ego_end_s < check_car_s && check_car_s - ego_end_s < 15)){
                 colli += (1.0 * COLLISION_COST);
                 goto Out;
             } else if (abs(check_car_d - d[0]) < 3.0) {
                 buffer += (1-logistic(abs(check_car_s - ego_end_s)) * BUFFER_COST);
+            }
+        }
+
+        if (check_car_lane == ego_cur_lane){
+            if(check_car_s0 > ego_begin_sd[0]){
+                if (closest_dist_ahead > check_car_s0 - ego_begin_sd[0]){
+                    closest_dist_ahead = check_car_s0 - ego_begin_sd[0];
+                    car_ahead_s = check_car_s0;
+                    car_ahead_v = check_car_speed;
+                    car_ahead_id = sf[0];
+                }
             }
         }
 
@@ -594,6 +610,19 @@ double calculateCost(vector<vector<double>> trajectory, vector<vector<double>> e
 
     }
 //    }
+
+
+    for(auto sf: sensor_fusion){
+        double check_car_speed = sqrt(sf[3] * sf[3] + sf[4] * sf[4]);
+        double check_car_s0 = sf[5];
+
+        if (car_ahead_id != sf[0]){
+            if (abs(check_car_s0 - car_ahead_s) < 10.0 && (check_car_speed - car_ahead_v)/car_ahead_v < 0.15){
+                baffled = 10.0;
+                goto Out;
+            }
+        }
+    }
 
     if(ego_vxy_max * 2.24 > 49.5||ego_vsd_max * 2.24 > 49.5)
         v_lim = 1.0;
@@ -613,7 +642,7 @@ double calculateCost(vector<vector<double>> trajectory, vector<vector<double>> e
     effi = logistic(abs(49.5 - ego_vxy_mean * 2.24)/50.0) * EFFICIENCY_COST;
 
     Out:
-    cost = colli + buffer + v_lim + a_lim + j_lim + effi + road_lim;
+    cost = colli + buffer + v_lim + a_lim + j_lim + effi + road_lim + baffled;
 
     if (cost < 10)
         cout << cost << ": "<< colli << ", " << buffer << ", " << v_lim << ", " << a_lim << ", " << j_lim << ", " << effi <<endl;
@@ -844,7 +873,7 @@ int main() {
                             vector<vector<double>> ego_readings;
                             ego_readings = getTrajectoryReadings(temp_trajectory, map_waypoints_x, map_waypoints_y);
 
-                            double temp_cost = calculateCost(temp_trajectory, ego_readings, sensor_fusion, goal_lane, check_car_ahead_vs);
+                            double temp_cost = calculateCost(temp_trajectory, ego_readings, sensor_fusion, goal_lane, check_car_ahead_vs, {car_s0, car_d0});
 
                             costs.push_back(temp_cost);
 
