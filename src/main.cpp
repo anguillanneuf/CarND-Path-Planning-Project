@@ -316,14 +316,22 @@ Eigen::VectorXd polyfit(Eigen::VectorXd xvals, Eigen::VectorXd yvals, int order)
 }
 
 // Find road curvature
-double getRoadCurvature(double car_s, int lane, vector<double> maps_s, vector<double> maps_x, vector<double> maps_y){
+double getRoadCurvature(double ix, double iy, double itheta, vector<double> maps_s, vector<double> maps_x, vector<double> maps_y){
 
     Eigen::VectorXd x(10), y(10);
 
+    int next_wp = NextWaypoint(ix, iy, itheta, maps_x, maps_y);
+
+    int prev_wp;
+    prev_wp = next_wp - 1;
+
+    if (next_wp == 0) {
+        prev_wp = maps_x.size() - 1;
+    }
+
     for (int i = 0; i < 10; i ++){
-        vector<double> temp = getXY(car_s + 10 * i, (2 + 4 * lane), maps_s, maps_x, maps_y);
-        x[i] = temp[0];
-        y[i] = temp[1];
+        x[i] = maps_x[prev_wp+i];
+        y[i] = maps_y[prev_wp+i];
     }
 
     auto coeffs = polyfit(x, y, 3);
@@ -762,8 +770,8 @@ int main() {
                     }
 
                     // TODO: use map xy to find road curvature
-//                    double curvature = getRoadCurvature(car_s, lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-//                    cout << "d_dot: " << vd << " Road curvature: " << curvature << endl;
+                    double curvature = getRoadCurvature(car_x, car_y, car_yaw, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+                    cout << "Road curvature: " << curvature << endl;
 
                     vector<vector<double>> trajectory;
 
@@ -789,7 +797,7 @@ int main() {
                             trajectory = generateTrajectoryFromGoalLane({car_s, car_d}, previous_path_x, previous_path_y, ref_v, ego.goal_lane,
                                                                         map_waypoints_s, map_waypoints_x, map_waypoints_y);
                         }
-                    } else if ((car_speed < 45.0) && (check_car_ahead) && (check_car_ahead_vs < 45.0/2.24)) {
+                    } else if ((car_speed < 45.0) && (check_car_ahead) && (check_car_ahead_vs < 45.0/2.24) && curvature > 400.0) {
 
                         cout << "Choose PLCL or PLCR" << endl;
 
@@ -841,7 +849,7 @@ int main() {
                             }
                         }
 
-                        if (cost > 10) {
+                        if (cost > 10 | anchor_lane < 0 || anchor_lane > 2) {
                             goto KL;
                         }else if (anchor_lane < cur_lane){
                             cout << ego.state << endl;
