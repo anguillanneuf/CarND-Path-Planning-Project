@@ -553,7 +553,7 @@ double calculateCost(vector<vector<double>> trajectory, vector<double> ego_begin
     int ego_end_lane = calculateLane(ego_end_d);
     double ego_v_max = ego_readings[24], ego_a_max = ego_readings[25], ego_j_max = ego_readings[26], ego_v = ego_readings[27];
 
-    double colli, buffer, v_lim, a_lim, j_lim, effi;
+    double colli = 0.0, buffer = 0.0, v_lim = 0.0, a_lim = 0.0, j_lim = 0.0, effi;
     double COLLISION_COST = 10.0;
     double BUFFER_COST = 1.0;
     double EFFICIENCY_COST = 1.0;
@@ -572,7 +572,7 @@ double calculateCost(vector<vector<double>> trajectory, vector<double> ego_begin
                 if ((ego_end_s > check_car_s & ego_begin_sd[0] < sf[5]) | (ego_end_s < check_car_s & ego_begin_sd[0] > sf[5])){
                     colli += (1.0 * COLLISION_COST);
                 } else {
-                    buffer = (1/exp(abs(ego_end_s - check_car_s) - 15.0) * BUFFER_COST);
+                    buffer += (1/exp(abs(ego_end_s - check_car_s) - 15.0) * BUFFER_COST);
                 }
             }
         }
@@ -687,14 +687,18 @@ int main() {
                     int prev_size = previous_path_x.size();
                     int cur_lane = calculateLane(car_d);
 
-                    bool too_close = false;
+                    bool too_close_ahead = false;
                     bool check_car_ahead = false;
+                    bool too_close_behind = false;
                     double check_car_ahead_vs = 60.0;
 
                     if (prev_size > 0){
-//                        car_d = end_path_d;
+                        car_d = end_path_d;
                         car_s = end_path_s;
                     }
+
+                    double car_s0 = j[1]["s"];
+                    double adjacent_speed = 100.0;
 
                     //find ref_v to use
                     for (int i = 0; i < sensor_fusion.size(); i ++){
@@ -706,33 +710,35 @@ int main() {
                             double vx = sensor_fusion[i][3];
                             double vy = sensor_fusion[i][4];
                             double check_speed = sqrt(vx * vx + vy * vy);
-                            double check_car_begin_s = sensor_fusion[i][5];
-                            double check_car_s = sensor_fusion[i][5];
-                            double ego_begin_s = j[1]["s"];
+                            double check_car_s0 = sensor_fusion[i][5];
+                            double check_car_s;
 
-                            check_car_s += ((double)prev_size*0.02*check_speed); // when ego gets to the end of
+                            check_car_s = check_car_s0 + ((double)prev_size*0.02*check_speed); // when ego gets to the end of
                             // the previous trajectory, where would the other car be
 
-//                            if ((ego.state == "KL") &
-//                                    (((check_car_s < end_path_s) & (end_path_s - check_car_s < 30)) |
-//                                            ((check_car_s > car_s) & (check_car_s - car_s < 30))){
+                            if (((check_car_s > car_s) && (check_car_s - car_s < 30) && (check_car_s0 > car_s0))){
 
-                            if ((check_car_s > car_s) & (check_car_s - car_s < 30) & (check_car_begin_s > ego_begin_s)){
-                                //ref_v = 30;
-                                too_close = true;
+                                too_close_ahead = true;
                                 // determine the speed of the first car ahead
                                 if ((check_car_s - car_s) < closest_distance){
                                     closest_distance = check_car_s - car_s;
                                     check_car_ahead_vs = check_speed; // m/s
                                 }
                             }
+
+                            if(((check_car_s < car_s) && (car_s - check_car_s < 30) && (check_car_s0 < car_s0))){
+                                too_close_behind = true;
+                            }
                         }
                     }
 
-                    if (too_close)
+                    if ((too_close_ahead && !too_close_behind))
                         ref_v -= 0.25;
-                    else if (ref_v < 49.5){
+                    else if (ref_v < 49.5 || (!too_close_ahead && too_close_behind)){
                         ref_v += 0.25; // more efficient if done in below
+                        ref_v = min(ref_v, 49.5);
+                    } else if (too_close_ahead || too_close_behind){
+                        ref_v = check_car_ahead_vs;
                     }
 
                     vector<double> ptsx;
@@ -783,13 +789,12 @@ int main() {
                             trajectory = generateTrajectoryFromGoalLane({car_s, car_d}, previous_path_x, previous_path_y, ref_v, ego.goal_lane,
                                                                         map_waypoints_s, map_waypoints_x, map_waypoints_y);
                         }
-                    } else if ((car_speed < 45.0) & (check_car_ahead) & (check_car_ahead_vs < 45.0/2.24)) {
+                    } else if ((car_speed < 45.0) && (check_car_ahead) && (check_car_ahead_vs < 45.0/2.24)) {
 
                         cout << "Choose PLCL or PLCR" << endl;
 
                         vector<vector<double>> anchors;
                         int anchor_lane;
-
                         vector<double> costs;
                         double cost = 9999;
 
@@ -800,6 +805,19 @@ int main() {
                             pair<int, vector<vector<double>>> temp_laneAndTrajectory;
                             vector<vector<double>> temp_trajectory;
                             vector<double> ego_end_sd;
+                            int temp_lane = calculateLane(anchor[1]);
+
+                            if(temp_lane < cur_lane){
+                                ego.state = "PLCL";
+                                ego.goal_lane = cur_lane - 1;
+                                if (ego.goal_lane < 0)
+                                    continue;
+                            } else {
+                                ego.state = "PLCR";
+                                ego.goal_lane = cur_lane + 1;
+                                if (ego.goal_lane > 2)
+                                    continue;
+                            }
 
                             temp_laneAndTrajectory = generateTrajectory(anchor, previous_path_x, previous_path_y, ref_v,
                                                                         map_waypoints_s, map_waypoints_x, map_waypoints_y);
@@ -818,18 +836,18 @@ int main() {
                             if (temp_cost < cost){
                                 cost = temp_cost;
                                 trajectory = temp_trajectory;
-                                anchor_lane = calculateLane(anchor[1]);
+                                anchor_lane = temp_lane;
                             }
                         }
 
                         if (cost > 10) {
                             goto KL;
                         }else if (anchor_lane < cur_lane){
-                            cout << "PLCL" << endl;
+                            cout << ego.state << endl;
                             ego.state = "LCL";
                             ego.goal_lane = cur_lane - 1;
                         } else {
-                            cout << "PLCR" << endl;
+                            cout << ego.state << endl;
                             ego.state = "LCR";
                             ego.goal_lane = cur_lane + 1;
                         }
