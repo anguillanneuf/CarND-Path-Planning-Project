@@ -546,11 +546,11 @@ pair<int, vector<vector<double>>> generateTrajectory(vector<double> sd, vector<d
 
 // calculate cost
 double calculateCost(vector<vector<double>> trajectory, vector<double> ego_begin_sd, vector<double> ego_end_sd, vector<double> ego_readings,
-                     vector<vector<double>> sensor_fusion){
+                     vector<vector<double>> sensor_fusion, int ego_goal_lane){
 
     double cost;
     double ego_end_s = ego_end_sd[0], ego_end_d = ego_end_sd[1];
-    int ego_end_lane = calculateLane(ego_end_d);
+//    int ego_end_lane = calculateLane(ego_end_d);
     double ego_v_max = ego_readings[24], ego_a_max = ego_readings[25], ego_j_max = ego_readings[26], ego_v = ego_readings[27];
 
     double colli = 0.0, buffer = 0.0, v_lim = 0.0, a_lim = 0.0, j_lim = 0.0, effi;
@@ -568,8 +568,8 @@ double calculateCost(vector<vector<double>> trajectory, vector<double> ego_begin
             double check_car_d = sf[6];
             int check_car_lane = calculateLane(check_car_d);
 
-            if (ego_end_lane == check_car_lane){
-                if ((ego_end_s > check_car_s & ego_begin_sd[0] < sf[5]) | (ego_end_s < check_car_s & ego_begin_sd[0] > sf[5])){
+            if (ego_goal_lane == check_car_lane){
+                if ((ego_end_s > check_car_s && ego_end_s - check_car_s < 15) | (ego_end_s < check_car_s && check_car_s - ego_end_s < 15)){
                     colli += (1.0 * COLLISION_COST);
                 } else {
                     buffer += (1/exp(abs(ego_end_s - check_car_s) - 15.0) * BUFFER_COST);
@@ -806,15 +806,16 @@ int main() {
                             vector<vector<double>> temp_trajectory;
                             vector<double> ego_end_sd;
                             int temp_lane = calculateLane(anchor[1]);
+                            int goal_lane;
 
                             if(temp_lane < cur_lane){
                                 ego.state = "PLCL";
-                                ego.goal_lane = cur_lane - 1;
+                                goal_lane = cur_lane - 1;
                                 if (ego.goal_lane < 0)
                                     continue;
                             } else {
                                 ego.state = "PLCR";
-                                ego.goal_lane = cur_lane + 1;
+                                goal_lane = cur_lane + 1;
                                 if (ego.goal_lane > 2)
                                     continue;
                             }
@@ -829,7 +830,7 @@ int main() {
                             vector<double> ego_readings;
                             ego_readings = getEgoReadings(temp_trajectory, map_waypoints_x, map_waypoints_y);
 
-                            double temp_cost = calculateCost(temp_trajectory, {car_s, car_d}, ego_end_sd, ego_readings, sensor_fusion);
+                            double temp_cost = calculateCost(temp_trajectory, {car_s, car_d}, ego_end_sd, ego_readings, sensor_fusion, goal_lane);
 
                             costs.push_back(temp_cost);
 
