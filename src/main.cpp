@@ -320,52 +320,61 @@ double getRoadCurvature(double ix, double iy, double itheta, vector<double> maps
 }
 
 // Generate anchor sd points 4 seconds into the future (after the end of the previous path)
-vector<vector<double>> generateAnchors(double car_s, int prev_size, vector<vector<double>> sensor_fusion, int lane){
+vector<vector<double>> generateAnchors(double car_s, int prev_size, vector<vector<double>> sensor_fusion, int lane, double ego_speed){
 
     vector<int> lanes;
     lanes.push_back(lane-1); lanes.push_back(lane+1);
 
     vector<vector<double>> anchors;
+    int temp =0;
 
     for(auto l: lanes){
-        if(l > -1 | l < 3) {
+        if(l > -1 && l < 3) {
             vector<vector<double>> cars_in_lane_sf;
 
             // I hope auto takes care of empty sensor_fusion
             for (auto sf: sensor_fusion) {
-                if (sf[6] < l * 4 & sf[6] > (l + 1) * 4) {
+                if (sf[6] > (double)l * 4 && sf[6] < ((double)l + 1) * 4) {
                     cars_in_lane_sf.push_back(sf);
                 }
             }
+            cout << "lane " << l << ": " << cars_in_lane_sf.size() << " cars" << endl;
 
             vector<double> marks;
-            marks.push_back(car_s + 90);
+            marks.push_back(car_s + 75);
 
-            // Look ahead 4 seconds (= 400 intervals) ahead of the end of the previous path
+            // Look 100*0.02 seconds ahead of the end of the previous path
             for(auto sf: cars_in_lane_sf){
                 double vx = sf[3];
                 double vy = sf[4];
                 double check_speed = sqrt(vx * vx + vy * vy);
                 double check_car_s = sf[5];
-                check_car_s += ((double)(prev_size + 200) * 0.02 * check_speed);
-                marks.push_back(check_car_s);
+                check_car_s += ((double)(prev_size + int(60/ego_speed/0.02)) * 0.02 * check_speed);
+                if(check_car_s > car_s+15 && check_car_s < car_s+45)
+                    marks.push_back(check_car_s);
             }
+
+//            cout << "lane " << l << ": " << marks.size() << " marks" << endl;
 
             // Drop anchors between marks
             // 1). sort marks;
             // 2). look 60m ahead of car_s, drop anchors every 2m apart, giving other cars a buffer zone of 15m
             // sort(marks.begin(), marks.end());
-            for (int j = 1; j < 90; j += 2){
+            for (double j = car_s+15; j < car_s+45; j += 1){
                 bool ok_to_drop = true;
                 for (auto m: marks){
-                    if ((car_s + j > m && car_s + j - m > 15) || (m > car_s + j && m - car_s -j > 30) )
+                    if ((j > m && j - m < 15) || (m > j && m - j < 30) )
                         ok_to_drop = false;
                 }
                 if (ok_to_drop)
-                    anchors.push_back({car_s + j, (double)2 + l * 4});
+                    anchors.push_back({j, (double)2 + l * 4});
             }
+            cout << "lane " << l << ": " << anchors.size()-temp << " anchors" << endl;
+            temp = anchors.size()-temp;
         }
     }
+
+
     return anchors;
 }
 
@@ -444,14 +453,11 @@ vector<vector<double>> generateTrajectoryFromGoalLane(vector<double> sd, vector<
 }
 
 // Generate trajectory (x,y) from anchor (s, d)
-pair<int, vector<vector<double>>> generateTrajectory(vector<double> sd, vector<double> prev_path_x, vector<double> prev_path_y, double ref_v,
+vector<vector<double>> generateTrajectory(vector<double> sd, vector<double> prev_path_x, vector<double> prev_path_y, double ref_v,
                                           vector<double> maps_s, vector<double> maps_x, vector<double> maps_y){
 
-    pair<int, vector<vector<double>>> laneAndTrajectory;
     vector<vector<double>> trajectory;
     vector<double> pts_x, pts_y;
-    int curLane, endLane;
-    curLane = calculateLane(sd[1]);
 
     // add two points to pts_x and pts_y
     for (int i = 2; i > 0; i --){
@@ -465,14 +471,12 @@ pair<int, vector<vector<double>>> generateTrajectory(vector<double> sd, vector<d
     double ref_prev_y = pts_y[0];
     double ref_yaw = atan2((ref_y - ref_prev_y), (ref_x - ref_prev_x));
 
-    vector<vector<double>> faraway;
     // add another four points to pts_x and pts_y
-    for (int i = 1; i <= 4; i ++){
-        vector<double> xy = getXY(sd[0]+30*i, (2+4*curLane), maps_s, maps_x, maps_y);
+    for (int i = 1; i < 4; i ++){
+        vector<double> xy = getXY(sd[0]+30*i, sd[1], maps_s, maps_x, maps_y);
 
         pts_x.push_back(xy[0]);
         pts_y.push_back(xy[1]);
-        faraway.push_back({xy[0], xy[1]});
     }
 
 
@@ -520,14 +524,8 @@ pair<int, vector<vector<double>>> generateTrajectory(vector<double> sd, vector<d
         trajectory.push_back({x_point, y_point});
     }
 
-    vector<double> endsd = getFrenetFromTrajectory(faraway, maps_x, maps_y);
-    endLane = calculateLane(endsd[1]);
-
-    // trajectory has 50 elements now
-    laneAndTrajectory.first = endLane;
     trajectory.resize(50);
-    laneAndTrajectory.second = trajectory;
-    return laneAndTrajectory;
+    return trajectory;
 }
 
 // calculate cost
@@ -584,7 +582,7 @@ double calculateCost(vector<vector<double>> trajectory, vector<vector<double>> e
         }
     }
 
-    cout << ego_end_s << " vs. ";
+//    cout << ego_end_s << " vs. ";
 
     double closest_dist_ahead = 999;
 
@@ -601,9 +599,10 @@ double calculateCost(vector<vector<double>> trajectory, vector<vector<double>> e
         // check both cur_lane and goal_lane for collision and buffer using s //|| ego_cur_lane == check_car_lane
         // when ego makes to goal lane, if it's behind car
         if ((ego_goal_lane == check_car_lane) || (ego_cur_lane == check_car_lane)){
-            cout << check_car_s << " ";
-            if ((ego_end_s > check_car_s && ego_end_s - check_car_s < 15 ) || (ego_end_s < check_car_s && check_car_s - ego_end_s < 15)){
+//            cout << check_car_s << " ";
+            if ((ego_end_s > check_car_s && ego_end_s - check_car_s < 15 ) || (ego_end_s < check_car_s && check_car_s - ego_end_s < 30)){
                 colli += (1.0 * COLLISION_COST);
+//                cout << "Lane " << ego_goal_lane << " collison" << endl;
                 goto Out;
             } else if (abs(check_car_d - d[0]) < 6.0) {
 
@@ -627,6 +626,7 @@ double calculateCost(vector<vector<double>> trajectory, vector<vector<double>> e
 
         if(abs(check_car_s_i - s_i) < 30.0 && ego_goal_lane == check_car_lane){
             colli = 1.0 * COLLISION_COST;
+            cout << "Lane " << ego_goal_lane << " collison" << endl;
             goto Out;
         }
     }
@@ -637,8 +637,9 @@ double calculateCost(vector<vector<double>> trajectory, vector<vector<double>> e
 
         for(int i = 0; i < car_ahead_id.size(); i++){
             if (car_ahead_id[i] != sf[0] && ego_goal_lane == calculateLane(sf[6])){
-                if (abs(check_car_s0 - car_ahead_s[i]) < 30.0 && abs(car_ahead_speed - car_ahead_v[i])/car_ahead_speed < 0.15){
+                if (abs(check_car_s0 - car_ahead_s[i]) < 15.0 && abs(car_ahead_speed - car_ahead_v[i])/car_ahead_speed < 0.15){
                     baffled = 10.0;
+                    cout << "Lane " << ego_goal_lane << " baffled" << endl;
                     goto Out;
                 }
             }
@@ -654,7 +655,8 @@ double calculateCost(vector<vector<double>> trajectory, vector<vector<double>> e
 
     for(auto i: d){
         int temp_lane = calculateLane(i);
-        if (temp_lane < -1){
+        if (temp_lane < 0){
+            cout << "Lane " << ego_goal_lane << " road limit" << endl;
             road_lim = 10.0;
             goto Out;
         }
@@ -666,7 +668,7 @@ double calculateCost(vector<vector<double>> trajectory, vector<vector<double>> e
     cost = colli + buffer + v_lim + a_lim + j_lim + effi + road_lim + baffled;
 
 //    if (cost < 10)
-    cout << endl << colli << ", " << baffled << ", "<< road_lim << " + " << buffer << ", " << effi << " + " << v_lim << ", " << a_lim << ", " << j_lim << endl;
+//    cout << ego_goal_lane <<": " << colli << ", " << baffled << ", "<< road_lim << " + " << buffer << ", " << effi << " + " << v_lim << ", " << a_lim << ", " << j_lim << endl;
 
     return cost;
 }
@@ -795,7 +797,7 @@ int main() {
                             check_car_s = check_car_s0 + ((double)prev_size*0.02*check_speed); // when ego gets to the end of
                             // the previous trajectory, where would the other car be
 
-                            if ((ego.state == "KL") && (check_car_s > car_s) && (check_car_s - car_s < 45) && (check_car_s0 > car_s0)){
+                            if ((ego.state == "KL") && (check_car_s > car_s) && (check_car_s - car_s < 30) && (check_car_s0 > car_s0)){
 
                                 too_close_ahead = true;
                                 // determine the speed of the first car ahead
@@ -805,7 +807,7 @@ int main() {
                                 }
                             }
 
-                            if(((check_car_s < car_s) && (car_s - check_car_s < 30) && (check_car_s0 < car_s0))){
+                            if(((check_car_s < car_s) && (car_s - check_car_s < 15) && (check_car_s0 < car_s0))){
                                 too_close_behind = true;
                                 check_car_behind_vs = check_speed;
                             }
@@ -815,7 +817,7 @@ int main() {
 //                    if (too_close_ahead){
                     if ((too_close_ahead)&&(ego.state=="KL")){
                         ref_v -= 0.25;
-                    } else if (ref_v < 49.5 || (!too_close_ahead && too_close_behind)){
+                    } else if (ref_v < 49.5 ){
                         ref_v += 0.25; // more efficient if done in below
 //                        ref_v = min(ref_v, 49.5);
                     }
@@ -826,11 +828,11 @@ int main() {
 //                    }
 
 
-                    if(ego.state != "KL"){
-                        if(too_close_ahead){
-                            ref_v = check_car_ahead_vs;
-                        }
-                    }
+//                    if(ego.state != "KL"){
+//                        if(too_close_ahead){
+//                            ref_v = check_car_ahead_vs;
+//                        }
+//                    }
 
                     ref_v = min(ref_v, 49.5);
 
@@ -892,49 +894,46 @@ int main() {
                         vector<double> costs;
                         double cost = 9999;
 
-                        anchors = generateAnchors(car_s, prev_size, sensor_fusion, cur_lane);
+                        anchors = generateAnchors(car_s, prev_size, sensor_fusion, cur_lane, car_speed/2.24);
+
 
                         for (auto anchor: anchors) {
 
-                            pair<int, vector<vector<double>>> temp_laneAndTrajectory;
                             vector<vector<double>> temp_trajectory;
                             int temp_lane = calculateLane(anchor[1]);
-                            int goal_lane;
 
-                            temp_laneAndTrajectory = generateTrajectory(anchor, previous_path_x, previous_path_y, ref_v,
+                            temp_trajectory = generateTrajectory(anchor, previous_path_x, previous_path_y, ref_v,
                                                                         map_waypoints_s, map_waypoints_x, map_waypoints_y);
-
-                            temp_trajectory = temp_laneAndTrajectory.second;
 
                             vector<vector<double>> ego_readings;
                             ego_readings = getTrajectoryReadings(temp_trajectory, map_waypoints_x, map_waypoints_y);
 
-                            double temp_cost = calculateCost(temp_trajectory, ego_readings, sensor_fusion, cur_lane, goal_lane, check_car_ahead_vs);
+                            double temp_cost = calculateCost(temp_trajectory, ego_readings, sensor_fusion, cur_lane, temp_lane, check_car_ahead_vs);
 
                             costs.push_back(temp_cost);
 
                             if (temp_cost < cost){
                                 cost = temp_cost;
                                 trajectory = temp_trajectory;
-                                anchor_lane = temp_lane;
+                                anchor_lane = calculateLane(anchor[1]);
                                 ego.goal_s = ego_readings[0][ego_readings[0].size()-1];
                             }
                         }
 
-                        if (cost >= 10 || anchor_lane < 0 || anchor_lane > 2) {
+                        if (cost >= 10) {
                             goto KL;
                         }else if (anchor_lane < cur_lane){
                             ego.state = "PLCL";
                             cout << ego.state << endl;
                             cout << "LCL started" << endl;
                             ego.state = "LCL";
-                            ego.goal_lane = cur_lane - 1;
+                            ego.goal_lane = anchor_lane;
                         } else {
                             ego.state = "PLCR";
                             cout << ego.state << endl;
                             cout << "LCR started" << endl;
                             ego.state = "LCR";
-                            ego.goal_lane = cur_lane + 1;
+                            ego.goal_lane = anchor_lane;
                         }
 
                     } else {
