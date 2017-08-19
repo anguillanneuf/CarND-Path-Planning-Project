@@ -29,7 +29,7 @@ double deg2rad(double x) { return x * pi() / 180; }
 double rad2deg(double x) { return x * 180 / pi(); }
 
 double logistic(double x){
-    return 2.0 / (1 + exp(-x)) - 1.0; //
+    return 2.0 / (1 + exp(-x)) - 1.0; // as x goes from -inf to +inf, y goes from -1 to 1. When x=0, y=0
 }
 
 double meanOfVector(vector<double> x){
@@ -314,7 +314,7 @@ double getRoadCurvature(double ix, double iy, double itheta, vector<double> maps
     return pow(1 + dfdx * dfdx, 1.5) / abs(dfdx2);
 }
 
-// Generate anchor points (s,d) at the end of the previous path), look behind rather than looking ahead.
+// Generate anchor points (s,d) at the end of the previous path, look behind rather than looking ahead.
 vector<vector<double>> generateAnchors(double car_s, vector<vector<double>> sensor_fusion, int lane, double ego_speed){
 
     vector<int> lanes; // lanes to consider
@@ -400,84 +400,9 @@ vector<vector<double>> generateAnchors(double car_s, vector<vector<double>> sens
     return anchors;
 }
 
-
-// Generate trajectory (x,y) from goal lane
-vector<vector<double>> generateTrajectoryFromGoalLane(vector<double> sd, vector<double> prev_path_x, vector<double> prev_path_y, double ref_v, int goal_lane,
-                                                      vector<double> maps_s, vector<double> maps_x, vector<double> maps_y){
-
-    vector<vector<double>> trajectory;
-    vector<double> pts_x, pts_y;
-
-    // add two points to pts_x and pts_y
-    for (int i = 2; i > 0; i --){
-        pts_x.push_back(prev_path_x[prev_path_x.size()-i]);
-        pts_y.push_back(prev_path_y[prev_path_y.size()-i]);
-    }
-
-    double ref_x = pts_x[1];
-    double ref_y = pts_y[1];
-    double ref_prev_x = pts_x[0];
-    double ref_prev_y = pts_y[0];
-    double ref_yaw = atan2((ref_y - ref_prev_y), (ref_x - ref_prev_x));
-
-    // add more points to pts_x and pts_y
-    for (int i = 1; i <= 6; i ++){
-        vector<double> xy = getXY(sd[0]+30*i, (2+4*goal_lane), maps_s, maps_x, maps_y);
-        pts_x.push_back(xy[0]);
-        pts_y.push_back(xy[1]);
-    }
-
-    // transform from global to local coordinates
-    for(int i = 0; i < pts_x.size(); i++)
-    {
-        double shift_x = pts_x[i]-ref_x;
-        double shift_y = pts_y[i]-ref_y;
-
-        pts_x[i] = shift_x*cos(0 - ref_yaw) - shift_y*sin(0 - ref_yaw);
-        pts_y[i] = shift_x*sin(0 - ref_yaw) + shift_y*cos(0 - ref_yaw);
-    }
-
-    // fit spline
-    tk::spline s;
-    s.set_points(pts_x, pts_y);
-
-    // populate trajectory with previous path first
-    for(int i = 0; i < prev_path_x.size(); i++)
-        trajectory.push_back({prev_path_x[i], prev_path_y[i]});
-
-    // plan 30m ahead along car's x direction
-    double target_x = 30.0;
-    double target_y = s(target_x);
-    double target_distance = sqrt(target_x*target_x+target_y*target_y);
-    double x_add_on = 0.0;
-
-    // add on to previous path using points from spline
-    for (int i = 1; i <= 75 - prev_path_x.size(); i ++){
-
-        double N = target_distance/(ref_v/2.24*0.02);
-
-        double x_point = x_add_on + target_x/N;
-        double y_point = s(x_point);
-
-        x_add_on = x_point;
-
-        double x_ref = x_point;
-        double y_ref = y_point;
-
-        // transform from local to global coordinates
-        x_point = ref_x + x_ref*cos(ref_yaw)-y_ref*sin(ref_yaw);
-        y_point = ref_y + x_ref*sin(ref_yaw)+y_ref*cos(ref_yaw);
-
-        trajectory.push_back({x_point, y_point});
-    }
-
-    trajectory.resize(50);
-    return trajectory;
-}
-
 // Generate trajectory (x,y) from anchor (s, d)
-vector<vector<double>> generateTrajectoryFromAnchors(vector<double> sd, vector<double> prev_path_x, vector<double> prev_path_y, double ref_v,
-                                                     vector<double> maps_s, vector<double> maps_x, vector<double> maps_y){
+vector<vector<double>> generateTrajectory(vector<double> sd, vector<double> prev_path_x, vector<double> prev_path_y, double ref_v, int goal_lane,
+                                          vector<double> maps_s, vector<double> maps_x, vector<double> maps_y){
 
     vector<vector<double>> trajectory;
     vector<double> pts_x, pts_y;
@@ -496,7 +421,8 @@ vector<vector<double>> generateTrajectoryFromAnchors(vector<double> sd, vector<d
 
     // add another four points to pts_x and pts_y
     for (int i = 1; i < 4; i ++){
-        vector<double> xy = getXY(sd[0]+30*i, sd[1], maps_s, maps_x, maps_y);
+//        vector<double> xy = getXY(sd[0]+30*i, sd[1], maps_s, maps_x, maps_y);
+        vector<double> xy = getXY(sd[0]+30*i, (2+4*goal_lane), maps_s, maps_x, maps_y);
 
         pts_x.push_back(xy[0]);
         pts_y.push_back(xy[1]);
@@ -551,8 +477,8 @@ vector<vector<double>> generateTrajectoryFromAnchors(vector<double> sd, vector<d
 }
 
 // calculate cost
-double calculateCost(vector<vector<double>> trajectory, vector<vector<double>> ego_readings,
-                     vector<vector<double>> sensor_fusion, int ego_cur_lane, int ego_goal_lane, double slow_car_speed, double slow_car_s){
+double calculateCost(vector<vector<double>> trajectory, vector<vector<double>> ego_readings, vector<vector<double>> sensor_fusion,
+                     int ego_cur_lane, int ego_goal_lane, double slow_car_speed, double slow_car_s){
 
     double cost = 0.0;
 
@@ -581,7 +507,7 @@ double calculateCost(vector<vector<double>> trajectory, vector<vector<double>> e
     double closest_dist_ahead = 999;
 
     int timesteps = 0;
-    double center_line;
+    double center_line; // line between current lane and goal lane
     double s_i = 0.0;
 
     if(ego_goal_lane < ego_cur_lane){
@@ -610,12 +536,11 @@ double calculateCost(vector<vector<double>> trajectory, vector<vector<double>> e
 
         double check_car_s_i = check_car_s0 + ((double)timesteps * 0.02 * check_car_speed);
 
-        // check collision
+        // check collision, by the time ego is close to the center line, how distant are other cars?
         if(abs(check_car_s_i - s_i) < 15.0 && ego_goal_lane == check_car_lane){
             colli = 10.0;
             goto Out;
         }
-
 
         // check both cur_lane and goal_lane for collision and update buffer
         if ((ego_goal_lane == check_car_lane) || (ego_cur_lane == check_car_lane)){
@@ -772,9 +697,11 @@ int main() {
                     // TODO: define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
 
                     struct Ego ego_ = ego;
+                    struct Ego ego_prev = ego;
 
                     int prev_size = previous_path_x.size();
                     int cur_lane = calculateLane(car_d0);
+                    double curvature = getRoadCurvature(car_x, car_y, car_yaw, map_waypoints_x, map_waypoints_y);
 
                     bool too_close_ahead = false;
                     bool too_close_behind = false;
@@ -786,8 +713,6 @@ int main() {
                         car_d = end_path_d;
                         car_s = end_path_s;
                     }
-
-                    double adjacent_speed = 100.0;
 
                     //find ref_v to use
                     for (int i = 0; i < sensor_fusion.size(); i ++){
@@ -823,7 +748,6 @@ int main() {
                         }
                     }
 
-
                     if ((too_close_ahead)&&(ego.state=="KL")){
                         ref_v -= 0.25;
                     } else if (ref_v < 49.5 ){
@@ -852,11 +776,8 @@ int main() {
 
                     }
 
-                    double curvature = getRoadCurvature(car_x, car_y, car_yaw, map_waypoints_x, map_waypoints_y);
-
+                    // Generate trajectory
                     vector<vector<double>> trajectory;
-
-                    struct Ego ego_prev = ego;
 
                     if (ego.state == "LCL") {
 
@@ -866,8 +787,8 @@ int main() {
                             goto KL;
                         }
                         else{
-                            trajectory = generateTrajectoryFromGoalLane({car_s, car_d}, previous_path_x, previous_path_y, ref_v, ego.goal_lane,
-                                                                        map_waypoints_s, map_waypoints_x, map_waypoints_y);
+                            trajectory = generateTrajectory({car_s, car_d}, previous_path_x, previous_path_y, ref_v, ego.goal_lane,
+                                                            map_waypoints_s, map_waypoints_x, map_waypoints_y);
                         }
                     } else if (ego.state == "LCR") {
 
@@ -877,8 +798,8 @@ int main() {
                             goto KL;
                         }
                         else{
-                            trajectory = generateTrajectoryFromGoalLane({car_s, car_d}, previous_path_x, previous_path_y, ref_v, ego.goal_lane,
-                                                                        map_waypoints_s, map_waypoints_x, map_waypoints_y);
+                            trajectory = generateTrajectory({car_s, car_d}, previous_path_x, previous_path_y, ref_v, ego.goal_lane,
+                                                            map_waypoints_s, map_waypoints_x, map_waypoints_y);
                         }
                     } else if ((car_speed < 45.0) && (too_close_ahead) && (check_car_ahead_vs < 45.0/2.24) && curvature > 800.0 ) {
 
@@ -896,8 +817,8 @@ int main() {
                             vector<vector<double>> temp_trajectory;
                             int temp_lane = calculateLane(anchor[1]);
 
-                            temp_trajectory = generateTrajectoryFromAnchors(anchor, previous_path_x, previous_path_y, ref_v,
-                                                                            map_waypoints_s, map_waypoints_x, map_waypoints_y);
+                            temp_trajectory = generateTrajectory(anchor, previous_path_x, previous_path_y, ref_v, temp_lane,
+                                                                 map_waypoints_s, map_waypoints_x, map_waypoints_y);
 
                             vector<vector<double>> ego_readings;
                             ego_readings = getTrajectoryReadings(temp_trajectory, map_waypoints_x, map_waypoints_y);
@@ -934,8 +855,8 @@ int main() {
                     } else {
                         KL:
                         ego.state = "KL";
-                        trajectory = generateTrajectoryFromGoalLane({car_s, car_d}, previous_path_x, previous_path_y, ref_v, ego.goal_lane,
-                                                                    map_waypoints_s, map_waypoints_x, map_waypoints_y);
+                        trajectory = generateTrajectory({car_s, car_d}, previous_path_x, previous_path_y, ref_v, ego.goal_lane,
+                                                        map_waypoints_s, map_waypoints_x, map_waypoints_y);
                     }
 
                     if (ego_.state != ego.state)
