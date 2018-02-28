@@ -1,6 +1,7 @@
+> **Please check out my project report at [Model Documentation.md](https://github.com/anguillanneuf/CarND-Path-Planning-Project/blob/master/Model%20Documentation.md)**
+
 # CarND-Path-Planning-Project
 Self-Driving Car Engineer Nanodegree Program.
-**Please check out my project report at [Model Documentation.md](https://github.com/anguillanneuf/CarND-Path-Planning-Project/blob/master/Model%20Documentation.md)**
    
 ### Simulator.
 You can download the Term3 Simulator which contains the Path Planning Project from the [releases tab (https://github.com/udacity/self-driving-car-sim/releases).
